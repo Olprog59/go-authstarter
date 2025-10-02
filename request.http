@@ -4,16 +4,6 @@
 @token = ""
 
 
-### encode
-
-GET {{host}}/encode HTTP/1.1
-Content-Type: application/json
-
-{
-  "password": "password123"
-}
-
-
 ### login
 
 POST {{host}}/login HTTP/1.1

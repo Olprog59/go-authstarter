@@ -2,9 +2,12 @@ package service
 
 import (
 	"errors"
+	"log"
 
+	"github.com/Olprog59/go-plugins/internal/config"
 	"github.com/Olprog59/go-plugins/internal/domain"
 	"github.com/Olprog59/go-plugins/internal/ports"
+	"github.com/Olprog59/go-plugins/internal/service/auth"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -15,10 +18,11 @@ var (
 
 type UserService struct {
 	repo ports.UserRepository
+	conf *config.Config
 }
 
-func NewUserService(r ports.UserRepository) *UserService {
-	return &UserService{repo: r}
+func NewUserService(r ports.UserRepository, c *config.Config) *UserService {
+	return &UserService{repo: r, conf: c}
 }
 
 // Auth vérifie le mot de passe.
@@ -33,12 +37,12 @@ func (s *UserService) Auth(username, password string) (*domain.User, error) {
 	return u, nil
 }
 
-func (s *UserService) Encode(password string) ([]byte, error) {
+func (s *UserService) encode(password string) ([]byte, error) {
 	return bcrypt.GenerateFromPassword([]byte(password), 10)
 }
 
 func (s *UserService) Register(username, password string) (*domain.User, error) {
-	bpass, err := bcrypt.GenerateFromPassword([]byte(password), 10)
+	bpass, err := s.encode(password)
 	if err != nil {
 		return nil, err
 	}
@@ -51,9 +55,10 @@ func (s *UserService) Login(username, password string) (*domain.User, error) {
 		return nil, ErrInvalidCredentials
 	}
 
+	token, err := auth.GenerateJWT(user.Username, s.conf.JWTToken)
+	log.Println(token, err)
 	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password))
-
-	if user.Password != password || err != nil {
+	if err != nil {
 		return nil, ErrInvalidCredentials
 	}
 

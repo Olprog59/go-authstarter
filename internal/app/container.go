@@ -41,8 +41,8 @@ func NewContainer(cfg *config.Config) (*Container, error) {
 		return nil, fmt.Errorf("migration: %w", err)
 	}
 
-	c.initRepositories()
-	c.initServices()
+	c.initRepositories(cfg)
+	c.initServices(cfg)
 
 	return c, nil
 }
@@ -82,8 +82,17 @@ func (c *Container) migrate() error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			username TEXT UNIQUE NOT NULL,
 			password TEXT NOT NULL,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			token TEXT UNIQUE
 		)`,
+		`CREATE TABLE IF NOT EXISTS tokens (
+				token TEXT PRIMARY KEY,
+				user_id INTEGER NOT NULL,
+				issued_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				expires_at DATETIME NOT NULL,
+				revoked BOOLEAN NOT NULL DEFAULT 0,
+				FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+		);`,
 	}
 
 	for _, migration := range migrations {
@@ -96,16 +105,16 @@ func (c *Container) migrate() error {
 	return nil
 }
 
-func (c *Container) initRepositories() {
+func (c *Container) initRepositories(conf *config.Config) {
 	// Injection des implémentations concrètes dans les ports
 	c.UserRepo = repository.NewSQLiteUser(c.DB)
 	// c.ProductRepo = repository.NewSQLiteProduct(c.DB)
 	// c.OrderRepo = repository.NewSQLiteOrder(c.DB)
 }
 
-func (c *Container) initServices() {
+func (c *Container) initServices(conf *config.Config) {
 	// Les services dépendent des ports, pas des implémentations
-	c.UserSvc = service.NewUserService(c.UserRepo)
+	c.UserSvc = service.NewUserService(c.UserRepo, conf)
 	// c.ProductSvc = service.NewProductService(c.ProductRepo)
 	// c.OrderSvc = service.NewOrderService(c.OrderRepo, c.ProductRepo, c.UserRepo)
 }
