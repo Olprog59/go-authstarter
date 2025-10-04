@@ -55,12 +55,16 @@ func (s *UserService) Login(username, password string) (*domain.User, error) {
 		return nil, ErrInvalidCredentials
 	}
 
-	token, err := auth.GenerateJWT(user.Username, s.conf.JWTToken)
-	log.Println(token, err)
 	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password))
 	if err != nil {
 		return nil, ErrInvalidCredentials
 	}
+	token, err := auth.GenerateJWT(user.Username, s.conf.JWTToken)
+	if err != nil {
+		log.Println("Error generating JWT:", err)
+		return nil, err
+	}
+	user.Token = token
 
 	return user, nil
 }

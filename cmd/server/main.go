@@ -11,7 +11,7 @@ import (
 
 	"github.com/Olprog59/go-plugins/internal/app"
 	"github.com/Olprog59/go-plugins/internal/config"
-	h "github.com/Olprog59/go-plugins/internal/transport/http"
+	"github.com/Olprog59/go-plugins/internal/transport/web"
 )
 
 func main() {
@@ -32,8 +32,8 @@ func run() error {
 	defer container.Close()
 
 	// Setup HTTP server
-	handler := h.NewHandler(container)
-	mux := h.NewMux(handler)
+	handler := web.NewHandler(container)
+	mux := web.NewMux(handler)
 
 	srv := &http.Server{
 		Addr:         cfg.Addr,

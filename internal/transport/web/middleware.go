@@ -1,4 +1,4 @@
-package http
+package web
 
 import (
 	"log/slog"
@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const bearerPrefix = "Bearer token-for-"
+const bearerPrefix = "Bearer "
 
 func Logging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

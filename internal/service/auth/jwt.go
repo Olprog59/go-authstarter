@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"log"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -14,7 +13,6 @@ func GenerateJWT(userID, jwtKey string) (string, error) {
 		IssuedAt:  jwt.NewNumericDate(time.Now()),
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	log.Println(jwtKey)
 	return token.SignedString([]byte(jwtKey))
 }
 

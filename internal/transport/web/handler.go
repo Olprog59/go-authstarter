@@ -1,8 +1,7 @@
-package http
+package web
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 
 	"github.com/Olprog59/go-plugins/internal/app"
@@ -34,13 +33,15 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid credentials", http.StatusUnauthorized)
 			return
 		}
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		// http.Error(w, "internal error", http.StatusInternalServerError)
+		ErrorResponse(w, err)
 		return
 	}
 
-	token := "token-for-" + user.Username
-	json.NewEncoder(w).Encode(map[string]string{
-		"token": token,
+	json.NewEncoder(w).Encode(map[string]any{
+		"token":    user.Token,
+		"username": user.Username,
+		"id":       user.ID,
 	})
 }
 
@@ -57,7 +58,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.container.UserSvc.Register(req.Username, req.Password)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("%+v\n", err), http.StatusInternalServerError)
+		ErrorResponse(w, err)
 		return
 	}
 
