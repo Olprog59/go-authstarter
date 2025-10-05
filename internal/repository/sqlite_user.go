@@ -3,8 +3,8 @@ package repository
 import (
 	"database/sql"
 
-	"github.com/Olprog59/go-plugins/internal/domain"
-	"github.com/Olprog59/go-plugins/internal/ports"
+	"github.com/Olprog59/go-fun/internal/domain"
+	"github.com/Olprog59/go-fun/internal/ports"
 )
 
 // Vérifie que sqliteUserRepo implémente bien l'interface

@@ -9,9 +9,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Olprog59/go-plugins/internal/app"
-	"github.com/Olprog59/go-plugins/internal/config"
-	"github.com/Olprog59/go-plugins/internal/transport/web"
+	"github.com/Olprog59/go-fun/internal/app"
+	"github.com/Olprog59/go-fun/internal/config"
+	"github.com/Olprog59/go-fun/internal/transport/web"
 )
 
 func main() {

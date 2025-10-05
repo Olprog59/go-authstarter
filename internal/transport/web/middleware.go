@@ -1,13 +1,22 @@
 package web
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/Olprog59/go-fun/internal/config"
+	"github.com/Olprog59/go-fun/internal/service/auth"
 )
 
-const bearerPrefix = "Bearer "
+type key int
+
+const (
+	bearerPrefix     = "Bearer "
+	claimsKey    key = 0
+)
 
 func Logging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -27,16 +36,23 @@ func Logging(next http.Handler) http.Handler {
 
 func Auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		auth := r.Header.Get("Authorization")
+		authorization := r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
 
 		// Validation plus robuste
-		if len(auth) < len(bearerPrefix) || !strings.HasPrefix(auth, bearerPrefix) {
-			w.Header().Set("Content-Type", "application/json")
-			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+		if len(authorization) < len(bearerPrefix) || !strings.HasPrefix(authorization, bearerPrefix) {
+			ErrorResponse(w, `{"error":"forbidden"}`, http.StatusInternalServerError)
 			return
 		}
 
-		next.ServeHTTP(w, r)
+		claims, err := auth.ValidateJWT(authorization[7:], config.NewEnv().JWTToken)
+		if err != nil {
+			ErrorResponse(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		ctx := context.WithValue(r.Context(), claimsKey, claims)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 

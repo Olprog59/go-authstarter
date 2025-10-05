@@ -4,10 +4,10 @@ import (
 	"errors"
 	"log"
 
-	"github.com/Olprog59/go-plugins/internal/config"
-	"github.com/Olprog59/go-plugins/internal/domain"
-	"github.com/Olprog59/go-plugins/internal/ports"
-	"github.com/Olprog59/go-plugins/internal/service/auth"
+	"github.com/Olprog59/go-fun/internal/config"
+	"github.com/Olprog59/go-fun/internal/domain"
+	"github.com/Olprog59/go-fun/internal/ports"
+	"github.com/Olprog59/go-fun/internal/service/auth"
 	"golang.org/x/crypto/bcrypt"
 )
 

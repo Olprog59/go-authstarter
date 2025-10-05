@@ -1,6 +1,6 @@
 package ports
 
-import "github.com/Olprog59/go-plugins/internal/domain"
+import "github.com/Olprog59/go-fun/internal/domain"
 
 // UserRepository définit le contrat pour la persistance des utilisateurs
 // Pattern: Repository Interface (Port)

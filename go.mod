@@ -1,4 +1,4 @@
-module github.com/Olprog59/go-plugins
+module github.com/Olprog59/go-fun
 
 go 1.25.1
 

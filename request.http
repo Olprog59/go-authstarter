@@ -24,17 +24,13 @@ Accept: application/json
 
 {
   "password": "password123",
-  "username": "admin"
+  "username": "sam"
 }
 
 
-### 
+### home
 
-GET {{host}}/ping HTTP/1.1
+GET {{host}}/ HTTP/1.1
 Content-Type: application/json
 Accept: application/json
-Authorization: Bearer {{login.response.body.token}}
-
-{
-  "password": "{{login.response.body.token}}"
-}
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnby1mdW4iLCJzdWIiOiJhZG1pbiIsImV4cCI6MTc1OTY5MjMzNCwibmJmIjoxNzU5Njg4NzM0LCJpYXQiOjE3NTk2ODg3MzR9.Yy6aUKwlheTamq70SK8kA-HpxDLbKRyDODnfI8A8LkA

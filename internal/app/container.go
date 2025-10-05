@@ -7,10 +7,10 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/Olprog59/go-plugins/internal/config"
-	"github.com/Olprog59/go-plugins/internal/ports"
-	"github.com/Olprog59/go-plugins/internal/repository"
-	"github.com/Olprog59/go-plugins/internal/service"
+	"github.com/Olprog59/go-fun/internal/config"
+	"github.com/Olprog59/go-fun/internal/ports"
+	"github.com/Olprog59/go-fun/internal/repository"
+	"github.com/Olprog59/go-fun/internal/service"
 )
 
 // Container regroupe toutes les dépendances
