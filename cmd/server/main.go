@@ -14,6 +14,10 @@ import (
 	"github.com/Olprog59/go-fun/internal/transport/web"
 )
 
+func init() {
+	log.SetFlags(log.Lshortfile | log.Ldate | log.LstdFlags)
+}
+
 func main() {
 	if err := run(); err != nil {
 		log.Fatal(err)

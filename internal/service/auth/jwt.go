@@ -1,28 +1,70 @@
 package auth
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
 
-func GenerateJWT(userID, jwtKey string) (string, error) {
+type TokenPair struct {
+	AccessToken  string    `json:"access_token"`
+	RefreshToken string    `json:"refresh_token"`
+	ExpiresAt    time.Time `json:"expires_at"`
+}
+
+type RefreshTokenRecord struct {
+	UserID    int64     `db:"user_id"`
+	Token     string    `db:"token"`
+	ExpiresAt time.Time `db:"expires_at"`
+	IsRevoked bool      `db:"is_revoked"`
+	issuedAt  time.Time `db:"created_at"`
+}
+
+func GenerateTokenPair(userID int64, jwtKey string) (*TokenPair, error) {
 	if len(jwtKey) < 32 {
-		return "", errors.New("JWT key trop faible")
+		return nil, errors.New("JWT key trop faible")
 	}
 
-	claims := &jwt.RegisteredClaims{
-		Subject:   userID,
-		ExpiresAt: jwt.NewNumericDate(time.Now().Add(1 * time.Hour)),
+	// Générer l'access token (courte durée)
+	accessClaims := &jwt.RegisteredClaims{
+		Subject:   strconv.FormatInt(userID, 10),
+		ExpiresAt: jwt.NewNumericDate(time.Now().Add(15 * time.Minute)), // 15 minutes
 		IssuedAt:  jwt.NewNumericDate(time.Now()),
 		NotBefore: jwt.NewNumericDate(time.Now()),
 		Issuer:    "go-fun",
 	}
 
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString([]byte(jwtKey))
+	accessToken := jwt.NewWithClaims(jwt.SigningMethodHS256, accessClaims)
+	accessTokenString, err := accessToken.SignedString([]byte(jwtKey))
+	if err != nil {
+		return nil, err
+	}
+
+	// Générer le refresh token (longue durée, valeur aléatoire)
+	refreshToken, err := generateSecureToken()
+	if err != nil {
+		return nil, err
+	}
+
+	return &TokenPair{
+		AccessToken:  accessTokenString,
+		RefreshToken: refreshToken,
+		ExpiresAt:    time.Now().Add(15 * time.Minute),
+	}, nil
+}
+
+// Génère un token cryptographiquement sécurisé
+func generateSecureToken() (string, error) {
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(bytes), nil
 }
 
 func ValidateJWT(tokenStr, jwtKey string) (*jwt.RegisteredClaims, error) {
@@ -41,4 +83,53 @@ func ValidateJWT(tokenStr, jwtKey string) (*jwt.RegisteredClaims, error) {
 	}
 
 	return nil, jwt.ErrTokenInvalidClaims
+}
+
+// Interface pour la gestion des refresh tokens en base
+type RefreshTokenStore interface {
+	SaveRefreshToken(userID int64, token string, expiresAt time.Time) error
+	GetRefreshToken(token string) (*RefreshTokenRecord, error)
+	RevokeRefreshToken(token string) error
+	RevokeAllUserTokens(userID string) error
+}
+
+// Fonction pour renouveler les tokens
+func RefreshTokens(refreshToken, jwtKey string, store RefreshTokenStore) (*TokenPair, error) {
+	// Vérifier le refresh token en base
+	tokenRecord, err := store.GetRefreshToken(refreshToken)
+	if err != nil {
+		return nil, errors.New("refresh token invalide")
+	}
+
+	// Vérifications de sécurité
+	if tokenRecord.IsRevoked {
+		return nil, errors.New("refresh token révoqué")
+	}
+
+	if time.Now().After(tokenRecord.ExpiresAt) {
+		return nil, errors.New("refresh token expiré")
+	}
+
+	// Rotation du token : révoquer l'ancien
+	if err := store.RevokeRefreshToken(refreshToken); err != nil {
+		return nil, err
+	}
+
+	// Générer une nouvelle paire de tokens
+	newTokenPair, err := GenerateTokenPair(tokenRecord.UserID, jwtKey)
+	if err != nil {
+		return nil, err
+	}
+
+	// Sauvegarder le nouveau refresh token
+	err = store.SaveRefreshToken(
+		tokenRecord.UserID,
+		newTokenPair.RefreshToken,
+		time.Now().Add(7*24*time.Hour), // 7 jours
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return newTokenPair, nil
 }

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"os"
 
 	_ "modernc.org/sqlite"
 
@@ -20,35 +21,35 @@ type Container struct {
 
 	// Ports (interfaces)
 	UserRepo ports.UserRepository
-	// ProductRepo ports.ProductRepository
-	// OrderRepo ports.OrderRepository
 
 	// Services (business logic)
 	UserSvc *service.UserService
-	// ProductSvc *service.ProductService
-	// OrderSvc *service.OrderService
+
+	Config            *config.Config
+	RefreshTokenStore ports.RefreshTokenStore
 }
 
 func NewContainer(cfg *config.Config) (*Container, error) {
 	c := &Container{}
+	c.Config = cfg
 
-	if err := c.initDatabase(cfg); err != nil {
+	if err := c.initDatabase(); err != nil {
 		return nil, fmt.Errorf("database init: %w", err)
 	}
 
-	if err := c.migrate(); err != nil {
+	if err := c.migrateFromFile("migrations/001_schema.sql"); err != nil {
 		c.Close()
 		return nil, fmt.Errorf("migration: %w", err)
 	}
 
-	c.initRepositories(cfg)
-	c.initServices(cfg)
+	c.initRepositories()
+	c.initServices()
 
 	return c, nil
 }
 
-func (c *Container) initDatabase(cfg *config.Config) error {
-	db, err := sql.Open("sqlite", cfg.DatabaseURL)
+func (c *Container) initDatabase() error {
+	db, err := sql.Open("sqlite", c.Config.DatabaseURL)
 	if err != nil {
 		return err
 	}
@@ -63,6 +64,7 @@ func (c *Container) initDatabase(cfg *config.Config) error {
 		}
 	}
 	exec("PRAGMA synchronous=NORMAL;")
+	exec("PRAGMA foreign_keys=ON;")
 	exec("PRAGMA wal_autocheckpoint=1000;")
 	exec("PRAGMA cache_size=10000;") // négatif pour pages, positif pour KB
 
@@ -76,47 +78,26 @@ func (c *Container) initDatabase(cfg *config.Config) error {
 	return nil
 }
 
-func (c *Container) migrate() error {
-	migrations := []string{
-		`CREATE TABLE IF NOT EXISTS users (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			username TEXT UNIQUE NOT NULL,
-			password TEXT NOT NULL,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			token TEXT UNIQUE
-		)`,
-		`CREATE TABLE IF NOT EXISTS tokens (
-				token TEXT PRIMARY KEY,
-				user_id INTEGER NOT NULL,
-				issued_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-				expires_at DATETIME NOT NULL,
-				revoked BOOLEAN NOT NULL DEFAULT 0,
-				FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-		);`,
+func (c *Container) migrateFromFile(path string) error {
+	sqlBytes, err := os.ReadFile(path)
+	if err != nil {
+		return err
 	}
-
-	for _, migration := range migrations {
-		if _, err := c.DB.Exec(migration); err != nil {
-			return err
-		}
+	// Exécute tout le script d’un coup
+	if _, err := c.DB.Exec(string(sqlBytes)); err != nil {
+		return err
 	}
-
-	log.Println("Migrations completed")
+	log.Println("Migrations from file completed")
 	return nil
 }
 
-func (c *Container) initRepositories(conf *config.Config) {
-	// Injection des implémentations concrètes dans les ports
+func (c *Container) initRepositories() {
 	c.UserRepo = repository.NewSQLiteUser(c.DB)
-	// c.ProductRepo = repository.NewSQLiteProduct(c.DB)
-	// c.OrderRepo = repository.NewSQLiteOrder(c.DB)
 }
 
-func (c *Container) initServices(conf *config.Config) {
-	// Les services dépendent des ports, pas des implémentations
-	c.UserSvc = service.NewUserService(c.UserRepo, conf)
-	// c.ProductSvc = service.NewProductService(c.ProductRepo)
-	// c.OrderSvc = service.NewOrderService(c.OrderRepo, c.ProductRepo, c.UserRepo)
+func (c *Container) initServices() {
+	c.RefreshTokenStore = repository.NewSQLiteRefreshTokenStore(c.DB)
+	c.UserSvc = service.NewUserService(c.UserRepo, c.Config, c.RefreshTokenStore)
 }
 
 func (c *Container) Close() error {

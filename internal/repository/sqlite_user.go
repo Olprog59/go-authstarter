@@ -19,9 +19,9 @@ func NewSQLiteUser(db *sql.DB) ports.UserRepository {
 	return &sqliteUserRepo{db: db}
 }
 
-func (r *sqliteUserRepo) Create(username, password string) (*domain.User, error) {
-	query := `INSERT INTO users (username, password) VALUES (?, ?)`
-	result, err := r.db.Exec(query, username, password)
+func (r *sqliteUserRepo) Create(email, password string) (*domain.User, error) {
+	query := `INSERT INTO users (email, password) VALUES (?, ?)`
+	result, err := r.db.Exec(query, email, password)
 	if err != nil {
 		// vérification d'erreur spécifique à SQLite
 		return nil, wrapDBError(err)
@@ -36,11 +36,11 @@ func (r *sqliteUserRepo) Create(username, password string) (*domain.User, error)
 }
 
 func (r *sqliteUserRepo) GetByID(id int64) (*domain.User, error) {
-	query := `SELECT id, username, password, created_at FROM users WHERE id = ?`
+	query := `SELECT id, email, password, created_at FROM users WHERE id = ?`
 	user := &domain.User{}
 	err := r.db.QueryRow(query, id).Scan(
 		&user.ID,
-		&user.Username,
+		&user.Email,
 		&user.Password,
 		&user.CreatedAt,
 	)
@@ -50,12 +50,12 @@ func (r *sqliteUserRepo) GetByID(id int64) (*domain.User, error) {
 	return user, nil
 }
 
-func (r *sqliteUserRepo) GetByUsername(username string) (*domain.User, error) {
-	query := `SELECT id, username, password, created_at FROM users WHERE username = ?`
+func (r *sqliteUserRepo) GetByEmail(email string) (*domain.User, error) {
+	query := `SELECT id, email, password, created_at FROM users WHERE email = ?`
 	user := &domain.User{}
-	err := r.db.QueryRow(query, username).Scan(
+	err := r.db.QueryRow(query, email).Scan(
 		&user.ID,
-		&user.Username,
+		&user.Email,
 		&user.Password,
 		&user.CreatedAt,
 	)
@@ -66,7 +66,7 @@ func (r *sqliteUserRepo) GetByUsername(username string) (*domain.User, error) {
 }
 
 func (r *sqliteUserRepo) List() ([]*domain.User, error) {
-	query := `SELECT id, username, password, created_at FROM users ORDER BY created_at DESC`
+	query := `SELECT id, email, password, created_at FROM users ORDER BY created_at DESC`
 	rows, err := r.db.Query(query)
 	if err != nil {
 		return nil, wrapDBError(err)
@@ -76,7 +76,7 @@ func (r *sqliteUserRepo) List() ([]*domain.User, error) {
 	var users []*domain.User
 	for rows.Next() {
 		user := &domain.User{}
-		if err := rows.Scan(&user.ID, &user.Username, &user.Password, &user.CreatedAt); err != nil {
+		if err := rows.Scan(&user.ID, &user.Email, &user.Password, &user.CreatedAt); err != nil {
 			return nil, wrapDBError(err)
 		}
 		users = append(users, user)
