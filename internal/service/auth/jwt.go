@@ -25,15 +25,16 @@ type RefreshTokenRecord struct {
 	issuedAt  time.Time `db:"created_at"`
 }
 
-func GenerateTokenPair(userID int64, jwtKey string) (*TokenPair, error) {
+func GenerateTokenPair(userID int64, jwtKey string, accessTokenDuration, refreshTokenDuration time.Duration) (*TokenPair, error) {
 	if len(jwtKey) < 32 {
 		return nil, errors.New("JWT key trop faible")
 	}
 
 	// Générer l'access token (courte durée)
+	expiresAt := time.Now().Add(accessTokenDuration)
 	accessClaims := &jwt.RegisteredClaims{
 		Subject:   strconv.FormatInt(userID, 10),
-		ExpiresAt: jwt.NewNumericDate(time.Now().Add(15 * time.Minute)), // 15 minutes
+		ExpiresAt: jwt.NewNumericDate(expiresAt),
 		IssuedAt:  jwt.NewNumericDate(time.Now()),
 		NotBefore: jwt.NewNumericDate(time.Now()),
 		Issuer:    "go-fun",
@@ -54,7 +55,7 @@ func GenerateTokenPair(userID int64, jwtKey string) (*TokenPair, error) {
 	return &TokenPair{
 		AccessToken:  accessTokenString,
 		RefreshToken: refreshToken,
-		ExpiresAt:    time.Now().Add(15 * time.Minute),
+		ExpiresAt:    expiresAt,
 	}, nil
 }
 
@@ -79,6 +80,9 @@ func ValidateJWT(tokenStr, jwtKey string) (*jwt.RegisteredClaims, error) {
 	}
 
 	if claims, ok := token.Claims.(*jwt.RegisteredClaims); ok && token.Valid {
+		if claims.Issuer != "go-fun" {
+			return nil, errors.New("invalid issuer")
+		}
 		return claims, nil
 	}
 
@@ -94,7 +98,7 @@ type RefreshTokenStore interface {
 }
 
 // Fonction pour renouveler les tokens
-func RefreshTokens(refreshToken, jwtKey string, store RefreshTokenStore) (*TokenPair, error) {
+func RefreshTokens(refreshToken, jwtKey string, store RefreshTokenStore, accessTokenDuration, refreshTokenDuration time.Duration) (*TokenPair, error) {
 	// Vérifier le refresh token en base
 	tokenRecord, err := store.GetRefreshToken(refreshToken)
 	if err != nil {
@@ -116,7 +120,7 @@ func RefreshTokens(refreshToken, jwtKey string, store RefreshTokenStore) (*Token
 	}
 
 	// Générer une nouvelle paire de tokens
-	newTokenPair, err := GenerateTokenPair(tokenRecord.UserID, jwtKey)
+	newTokenPair, err := GenerateTokenPair(tokenRecord.UserID, jwtKey, accessTokenDuration, refreshTokenDuration)
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +129,7 @@ func RefreshTokens(refreshToken, jwtKey string, store RefreshTokenStore) (*Token
 	err = store.SaveRefreshToken(
 		tokenRecord.UserID,
 		newTokenPair.RefreshToken,
-		time.Now().Add(7*24*time.Hour), // 7 jours
+		time.Now().Add(refreshTokenDuration),
 	)
 	if err != nil {
 		return nil, err

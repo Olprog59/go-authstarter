@@ -1,0 +1,56 @@
+# Server configuration
+server:
+  port: "8080"
+  # ReadTimeout is the maximum duration for reading the entire request, including the body.
+  read_timeout: 10s
+  # WriteTimeout is the maximum duration before timing out writes of the response.
+  write_timeout: 10s
+  # IdleTimeout is the maximum amount of time to wait for the next request when keep-alives are enabled.
+  idle_timeout: 120s
+
+# Environment (development, staging, production)
+environment: "development"
+
+# Database configuration
+database:
+  dsn: "data.db?_journal_mode=WAL&_busy_timeout=5000"
+
+# JWT and Cookie configuration
+auth:
+  # JWT secret key. Use a long, random string in production.
+  # Can be overridden by the JWT_SECRET environment variable.
+  jwt_secret: "your-super-secret-key"
+  # Access token duration (e.g., 15m, 1h)
+  access_token_duration: 15m
+  # Refresh token duration (e.g., 720h for 30 days)
+  refresh_token_duration: 720h
+  # Cookie domain
+  cookie_domain: "localhost"
+  # Cookie path
+  cookie_path: "/"
+  # Cookie secure flag (set to true in production with HTTPS)
+  cookie_secure: false
+
+# CORS configuration
+cors:
+  # List of allowed origins. Use "*" for public access (not recommended for production).
+  allowed_origins:
+    - "http://localhost:5173"
+    - "http://localhost:5174"
+
+# Rate Limiter configuration
+rate_limiter:
+  # Requests per second
+  rps: 2
+  # Burst size
+  burst: 4
+  # Enable rate limiter
+  enabled: true
+
+# SMTP configuration for sending emails
+smtp:
+  host: "localhost"
+  port: 1025
+  username: ""
+  password: ""
+  from: "no-reply@go-fun.dev"

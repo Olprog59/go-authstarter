@@ -11,11 +11,8 @@ import (
 	"github.com/Olprog59/go-fun/internal/service/auth"
 )
 
-type key int
-
 const (
-	bearerPrefix     = "Bearer "
-	claimsKey    key = 0
+	bearerPrefix = "Bearer "
 )
 
 func Logging(next http.Handler) http.Handler {
@@ -23,6 +20,14 @@ func Logging(next http.Handler) http.Handler {
 		start := time.Now()
 
 		w.Header().Set("Content-Type", "application/json")
+
+		if strings.Contains(r.URL.RawQuery, "access_token=") ||
+			strings.Contains(r.URL.RawQuery, bearerPrefix) {
+			slog.Error("🚨 TOKEN LEAK DETECTED", "url", r.URL.String(), "ip", r.RemoteAddr)
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+
 		next.ServeHTTP(w, r)
 
 		slog.Info("request",
@@ -34,7 +39,50 @@ func Logging(next http.Handler) http.Handler {
 	})
 }
 
-func Auth(next http.Handler) http.Handler {
+type Middleware struct {
+	conf          *config.Config
+	globalLimiter *RateLimiter // Rate limiter global
+	strictLimiter *RateLimiter // Rate limiter strict pour auth
+	userLimiter   *RateLimiter // Rate limiter par utilisateur
+}
+
+// NewMiddleware crée une nouvelle instance de Middleware avec les rate limiters configurés
+func NewMiddleware(conf *config.Config) *Middleware {
+	mw := &Middleware{
+		conf: conf,
+	}
+
+	// Initialiser les rate limiters seulement si activé
+	if conf.RateLimiter.Enabled {
+		// 1. Rate limiter global (basé sur la config)
+		mw.globalLimiter = NewRateLimiter(
+			conf.RateLimiter.RPS,
+			conf.RateLimiter.Burst,
+		)
+
+		// 2. Rate limiter strict pour les endpoints sensibles (auth)
+		strictRPS := conf.RateLimiter.RPS
+		strictBurst := conf.RateLimiter.Burst
+
+		// En production, on divise par 2 les limites pour l'auth
+		if conf.IsProduction() {
+			strictRPS = strictRPS / 2
+			if strictBurst > 2 {
+				strictBurst = strictBurst / 2
+			}
+		}
+		mw.strictLimiter = NewRateLimiter(strictRPS, strictBurst)
+
+		// 3. Rate limiter par utilisateur (2x plus permissif)
+		userRPS := conf.RateLimiter.RPS * 2
+		userBurst := conf.RateLimiter.Burst * 2
+		mw.userLimiter = NewRateLimiter(userRPS, userBurst)
+	}
+
+	return mw
+}
+
+func (m *Middleware) Auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
@@ -46,52 +94,59 @@ func Auth(next http.Handler) http.Handler {
 		} else {
 			// Sinon essayer le header Authorization Bearer
 			authorization := r.Header.Get("Authorization")
-			const bearerPrefix = "Bearer "
-			if len(authorization) < len(bearerPrefix) || !strings.HasPrefix(authorization, bearerPrefix) {
+			if !strings.HasPrefix(authorization, bearerPrefix) {
 				ErrorResponse(w, `{"error":"forbidden"}`, http.StatusUnauthorized)
 				return
 			}
-			tokenStr = authorization[len(bearerPrefix):]
+			tokenStr = strings.TrimPrefix(authorization, bearerPrefix)
 		}
 
-		claims, err := auth.ValidateJWT(tokenStr, config.NewEnv().JWTKey)
+		claims, err := auth.ValidateJWT(tokenStr, m.conf.Auth.JWTSecret)
 		if err != nil {
 			ErrorResponse(w, err.Error(), http.StatusUnauthorized)
 			return
 		}
 
-		ctx := context.WithValue(r.Context(), claimsKey, claims)
+		ctx := context.WithValue(r.Context(), ClaimsContextKey, claims)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-// Helper pour chaîner les middlewares
-func chain(h http.HandlerFunc, middlewares ...func(http.Handler) http.Handler) http.Handler {
-	handler := http.Handler(h)
-	for i := len(middlewares) - 1; i >= 0; i-- {
-		handler = middlewares[i](handler)
-	}
-	return handler
-}
-
-func corsMiddleware(next http.Handler) http.Handler {
+func (m *Middleware) Cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Autoriser l’origine de votre frontend
-		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:5173")
-		// Autoriser les méthodes HTTP utilisées
+		origin := r.Header.Get("Origin")
+		for _, allowed := range m.conf.Cors.AllowedOrigins {
+			if allowed == "*" || allowed == origin {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				break
+			}
+		}
+
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		// Autoriser ces headers CORS spécifiques
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
-		// Important si vous utilisez les cookies HTTP-only et authentification
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
 
-		// Répondre directement aux requêtes OPTIONS (préflight)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
 
-		// Passer au handler suivant pour toutes les autres requêtes
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (m *Middleware) SecurityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("X-XSS-Protection", "1; mode=block")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'")
+
+		if m.conf.IsProd() {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
+
 		next.ServeHTTP(w, r)
 	})
 }

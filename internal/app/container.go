@@ -1,10 +1,12 @@
 package app
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -27,6 +29,8 @@ type Container struct {
 
 	Config            *config.Config
 	RefreshTokenStore ports.RefreshTokenStore
+
+	ctxCancel context.CancelFunc
 }
 
 func NewContainer(cfg *config.Config) (*Container, error) {
@@ -49,7 +53,7 @@ func NewContainer(cfg *config.Config) (*Container, error) {
 }
 
 func (c *Container) initDatabase() error {
-	db, err := sql.Open("sqlite", c.Config.DatabaseURL)
+	db, err := sql.Open("sqlite", c.Config.Database.DSN)
 	if err != nil {
 		return err
 	}
@@ -98,9 +102,33 @@ func (c *Container) initRepositories() {
 func (c *Container) initServices() {
 	c.RefreshTokenStore = repository.NewSQLiteRefreshTokenStore(c.DB)
 	c.UserSvc = service.NewUserService(c.UserRepo, c.Config, c.RefreshTokenStore)
+
+	// Purge quotidienne + arrêt propre
+	ctx, cancel := context.WithCancel(context.Background())
+	c.ctxCancel = cancel // ajoute `ctxCancel context.CancelFunc` dans struct Container
+
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := c.RefreshTokenStore.PurgeExpired(time.Now()); err != nil {
+					log.Printf("purge failed: %v", err)
+				}
+			case <-ctx.Done():
+				log.Println("purge goroutine stopped")
+				return
+			}
+		}
+	}()
 }
 
+// Dans Close(), ajoute :
 func (c *Container) Close() error {
+	if c.ctxCancel != nil {
+		c.ctxCancel()
+	}
 	if c.DB != nil {
 		log.Println("Closing database...")
 		return c.DB.Close()

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -26,7 +27,16 @@ func main() {
 
 func run() error {
 	// Load configuration
-	cfg := config.NewEnv()
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return err
+	}
+
+	// Configurer le logger selon l'environnement
+	setupLogger(cfg)
+
+	// Afficher la configuration du rate limiter au démarrage
+	logStartupInfo(cfg)
 
 	// Initialize container with all dependencies
 	container, err := app.NewContainer(cfg)
@@ -37,14 +47,14 @@ func run() error {
 
 	// Setup HTTP server
 	handler := web.NewHandler(container)
-	mux := web.NewMux(handler)
+	mux := web.NewMux(handler, cfg)
 
 	srv := &http.Server{
-		Addr:         cfg.Addr,
+		Addr:         ":" + cfg.Server.Port,
 		Handler:      mux,
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		ReadTimeout:  cfg.Server.ReadTimeout,
+		WriteTimeout: cfg.Server.WriteTimeout,
+		IdleTimeout:  cfg.Server.IdleTimeout,
 	}
 
 	// Graceful shutdown
@@ -54,7 +64,7 @@ func run() error {
 	// Start server in goroutine
 	serverErr := make(chan error, 1)
 	go func() {
-		log.Printf("Server listening on %s", cfg.Addr)
+		log.Printf("Server listening on %s", srv.Addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			serverErr <- err
 		}
@@ -80,3 +90,68 @@ func run() error {
 	log.Println("Server stopped successfully")
 	return nil
 }
+
+// logStartupInfo affiche les informations de démarrage
+func logStartupInfo(conf *config.Config) {
+	slog.Info("🚀 Starting application",
+		"environment", conf.Environment,
+		"port", conf.Server.Port,
+	)
+
+	if conf.RateLimiter.Enabled {
+		slog.Info("🛡️  Rate limiter enabled",
+			"global_rps", conf.RateLimiter.RPS,
+			"global_burst", conf.RateLimiter.Burst,
+		)
+
+		if conf.IsProduction() {
+			slog.Info("🔒 Production mode: auth endpoints will use stricter limits",
+				"auth_rps", conf.RateLimiter.RPS/2,
+				"auth_burst", conf.RateLimiter.Burst/2,
+			)
+		}
+	} else {
+		slog.Warn("⚠️  Rate limiter is DISABLED")
+	}
+
+	slog.Info("⏱️  Token durations",
+		"access_token", conf.Auth.AccessTokenDuration,
+		"refresh_token", conf.Auth.RefreshTokenDuration,
+	)
+}
+
+// setupLogger configure le logger selon l'environnement
+func setupLogger(conf *config.Config) {
+	var handler slog.Handler
+
+	if conf.IsProduction() {
+		// En production : JSON structuré, level INFO
+		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+			Level: slog.LevelInfo,
+		})
+	} else {
+		// En développement : texte coloré, level DEBUG
+		handler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+			Level: slog.LevelDebug,
+		})
+	}
+
+	slog.SetDefault(slog.New(handler))
+}
+
+// Exemple de fonction d'initialisation de la base de données
+/*
+func initDB(conf *config.Config) (*sql.DB, error) {
+	db, err := sql.Open("sqlite3", conf.Database.DSN)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open database: %w", err)
+	}
+
+	if err := db.Ping(); err != nil {
+		return nil, fmt.Errorf("failed to ping database: %w", err)
+	}
+
+	slog.Info("✅ Database connected", "dsn", conf.Database.DSN)
+	return db, nil
+}
+*/

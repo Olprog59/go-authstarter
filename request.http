@@ -12,7 +12,7 @@ Accept: application/json
 
 {
   "email": "sam@sam.sam",
-  "password": "password123"
+  "password": "Password_123"
 }
 
 
@@ -24,7 +24,7 @@ Accept: application/json
 
 {
   "email": "sam@sam.sam",
-  "password": "password123"
+  "password": "Password_123"
 }
 
 
@@ -33,4 +33,4 @@ Accept: application/json
 GET http://localhost:8080 HTTP/1.1
 Content-Type: application/json
 Accept: application/json
-Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnby1mdW4iLCJzdWIiOiIxIiwiZXhwIjoxNzYwMjY4MzcyLCJuYmYiOjE3NjAyNjc0NzIsImlhdCI6MTc2MDI2NzQ3Mn0.PdXjCk0cV9bSX05lqibauPif6Rgc-SlGTbdYQ6YbXV4
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnby1mdW4iLCJzdWIiOiIxIiwiZXhwIjoxNzYyNjE5NzAwLCJuYmYiOjE3NjI2MTg4MDAsImlhdCI6MTc2MjYxODgwMH0.QDgYV4zj1lVto11wEJouEOKUZL2RJ8_HU-nvQUIwXIc

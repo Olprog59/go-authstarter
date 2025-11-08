@@ -1,8 +1,11 @@
 package repository
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
+	"log"
 	"time"
 
 	"github.com/Olprog59/go-fun/internal/domain"
@@ -23,6 +26,11 @@ func (s *SQLiteRefreshTokenStore) Save(t *domain.RefreshToken) error {
 	if t == nil {
 		return errors.New("the refrestoken is null")
 	}
+
+	// Stocke le hash, pas la valeur brute
+	hashedToken := sha256.Sum256([]byte(t.Token))
+	t.Token = hex.EncodeToString(hashedToken[:])
+
 	const query = `
     INSERT INTO refresh_tokens(token, user_id, issue_at, expires_at, is_revoked)
     VALUES (?, ?, ?, ?, ?)
@@ -44,7 +52,10 @@ func (s *SQLiteRefreshTokenStore) Get(tokenString string) (*domain.RefreshToken,
     FROM refresh_tokens
     WHERE token = ?
     `
-	row := s.DB.QueryRow(query, tokenString)
+	hashedToken := sha256.Sum256([]byte(tokenString))
+	hashed := hex.EncodeToString(hashedToken[:])
+
+	row := s.DB.QueryRow(query, hashed)
 
 	var t domain.RefreshToken
 	if err := row.Scan(
@@ -68,7 +79,10 @@ func (s *SQLiteRefreshTokenStore) Revoke(tokenString string) error {
     SET is_revoked = 1
     WHERE token = ?
     `
-	_, err := s.DB.Exec(query, tokenString)
+	hashedToken := sha256.Sum256([]byte(tokenString))
+	hashed := hex.EncodeToString(hashedToken[:])
+
+	_, err := s.DB.Exec(query, hashed)
 	return err
 }
 
@@ -87,6 +101,11 @@ func (s *SQLiteRefreshTokenStore) PurgeExpired(before time.Time) error {
     DELETE FROM refresh_tokens
     WHERE expires_at < ?
     `
-	_, err := s.DB.Exec(query, before)
-	return err
+	res, err := s.DB.Exec(query, before)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	log.Printf("Purged %d expired refresh token(s)", n)
+	return nil
 }

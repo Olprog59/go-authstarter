@@ -8,7 +8,7 @@ import (
 )
 
 func (h *Handler) Home(w http.ResponseWriter, r *http.Request) {
-	claims, ok := r.Context().Value(claimsKey).(*jwt.RegisteredClaims)
+	claims, ok := r.Context().Value(ClaimsContextKey).(*jwt.RegisteredClaims)
 	if !ok {
 		log.Println("redirect")
 		log.Println(claims)
