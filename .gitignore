@@ -421,3 +421,6 @@ $RECYCLE.BIN/
 # End of https://www.toptal.com/developers/gitignore/api/macos,windows,linux,go,intellij+all,vim,jetbrains+all,node,yarn
 
 tmp
+data.db
+data.sqlite*
+config.yaml

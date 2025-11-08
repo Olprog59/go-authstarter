@@ -9,17 +9,17 @@ server:
   idle_timeout: 120s
 
 # Environment (development, staging, production)
-environment: "development"
+environment: "production"
 
 # Database configuration
 database:
-  dsn: "data.db?_journal_mode=WAL&_busy_timeout=5000"
+  dsn: "data.db"
 
 # JWT and Cookie configuration
 auth:
   # JWT secret key. Use a long, random string in production.
   # Can be overridden by the JWT_SECRET environment variable.
-  jwt_secret: "your-super-secret-key"
+  jwt_secret: "super_secret"
   # Access token duration (e.g., 15m, 1h)
   access_token_duration: 15m
   # Refresh token duration (e.g., 720h for 30 days)

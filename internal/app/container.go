@@ -67,6 +67,7 @@ func (c *Container) initDatabase() error {
 			log.Printf("pragma failed (%s): %v", q, err)
 		}
 	}
+	exec("PRAGMA journal_mode=WAL;")
 	exec("PRAGMA synchronous=NORMAL;")
 	exec("PRAGMA foreign_keys=ON;")
 	exec("PRAGMA wal_autocheckpoint=1000;")

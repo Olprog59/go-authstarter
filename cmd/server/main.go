@@ -138,20 +138,3 @@ func setupLogger(conf *config.Config) {
 
 	slog.SetDefault(slog.New(handler))
 }
-
-// Exemple de fonction d'initialisation de la base de données
-/*
-func initDB(conf *config.Config) (*sql.DB, error) {
-	db, err := sql.Open("sqlite3", conf.Database.DSN)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
-	}
-
-	if err := db.Ping(); err != nil {
-		return nil, fmt.Errorf("failed to ping database: %w", err)
-	}
-
-	slog.Info("✅ Database connected", "dsn", conf.Database.DSN)
-	return db, nil
-}
-*/
