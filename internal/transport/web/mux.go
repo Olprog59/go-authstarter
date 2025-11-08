@@ -17,11 +17,11 @@ func NewMux(h *Handler, conf *config.Config) http.Handler {
 	// Vérification email - strict
 	mux.Handle("GET /verify", chain(h.VerifyEmail, mw, mw.RateLimitStrict))
 
-	// Refresh token - strict mais après auth
-	mux.Handle("POST /api/refresh", chain(h.RefreshToken, mw, mw.Auth, mw.RateLimitStrict))
+	// Refresh token - strict, auth, and CSRF protection
+	mux.Handle("POST /api/refresh", chain(h.RefreshToken, mw, mw.Auth, mw.CSRF, mw.RateLimitStrict))
 
-	// Routes utilisateur - rate limit par user (20 req/s, burst 40)
-	mux.Handle("GET /api/me", chain(h.Me, mw, mw.Auth, mw.RateLimitByUser))
+	// Routes utilisateur - rate limit par user, auth, and CSRF protection
+	mux.Handle("GET /api/me", chain(h.Me, mw, mw.Auth, mw.CSRF, mw.RateLimitByUser))
 	mux.Handle("GET /{$}", chain(h.Home, mw, mw.Auth, mw.RateLimitByUser))
 
 	// Middlewares globaux

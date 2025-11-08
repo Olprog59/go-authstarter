@@ -150,3 +150,38 @@ func (m *Middleware) SecurityHeaders(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// CSRF est un middleware pour la protection contre les attaques CSRF via le pattern "Double Submit Cookie".
+func (m *Middleware) CSRF(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// On applique la protection uniquement pour les méthodes qui modifient l'état.
+		// GET, HEAD, OPTIONS, TRACE sont considérées comme sûres.
+		// switch r.Method {
+		// case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace:
+		// 	next.ServeHTTP(w, r)
+		// 	return
+		// }
+
+		// 1. Récupérer le token depuis le cookie
+		cookie, err := r.Cookie("csrf_token")
+		if err != nil {
+			slog.Warn("CSRF middleware: missing csrf_token cookie", "err", err)
+			ErrorResponse(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+		cookieToken := cookie.Value
+
+		// 2. Récupérer le token depuis le header
+		headerToken := r.Header.Get("X-CSRF-Token")
+
+		// 3. Comparer les deux tokens
+		if cookieToken == "" || headerToken == "" || cookieToken != headerToken {
+			slog.Warn("CSRF token mismatch", "cookie_len", len(cookieToken), "header_len", len(headerToken))
+			ErrorResponse(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+
+		// Les tokens correspondent, la requête est légitime.
+		next.ServeHTTP(w, r)
+	})
+}

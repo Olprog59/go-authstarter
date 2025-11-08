@@ -1,5 +1,4 @@
--- DROP TABLE IF EXISTS refresh_tokens;
--- DROP TABLE IF EXISTS users;
+-- Initial schema for the application
 CREATE TABLE IF NOT EXISTS users(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   email TEXT UNIQUE NOT NULL CHECK (
@@ -33,4 +32,3 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
 
 CREATE INDEX IF NOT EXISTS idx_refresh_user ON refresh_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_refresh_expires ON refresh_tokens(expires_at);
-

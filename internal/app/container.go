@@ -3,17 +3,19 @@ package app
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
-	"os"
 	"time"
-
-	_ "modernc.org/sqlite"
 
 	"github.com/Olprog59/go-fun/internal/config"
 	"github.com/Olprog59/go-fun/internal/ports"
 	"github.com/Olprog59/go-fun/internal/repository"
 	"github.com/Olprog59/go-fun/internal/service"
+	"github.com/golang-migrate/migrate/v4"
+	"github.com/golang-migrate/migrate/v4/database/sqlite"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
+	_ "modernc.org/sqlite"
 )
 
 // Container regroupe toutes les dépendances
@@ -41,9 +43,9 @@ func NewContainer(cfg *config.Config) (*Container, error) {
 		return nil, fmt.Errorf("database init: %w", err)
 	}
 
-	if err := c.migrateFromFile("migrations/001_schema.sql"); err != nil {
+	if err := c.runMigrations(); err != nil {
 		c.Close()
-		return nil, fmt.Errorf("migration: %w", err)
+		return nil, fmt.Errorf("migration failed: %w", err)
 	}
 
 	c.initRepositories()
@@ -83,16 +85,27 @@ func (c *Container) initDatabase() error {
 	return nil
 }
 
-func (c *Container) migrateFromFile(path string) error {
-	sqlBytes, err := os.ReadFile(path)
+func (c *Container) runMigrations() error {
+	driver, err := sqlite.WithInstance(c.DB, &sqlite.Config{})
 	if err != nil {
-		return err
+		return fmt.Errorf("could not create sqlite driver: %w", err)
 	}
-	// Exécute tout le script d’un coup
-	if _, err := c.DB.Exec(string(sqlBytes)); err != nil {
-		return err
+
+	m, err := migrate.NewWithDatabaseInstance(
+		"file://migrations",
+		"sqlite",
+		driver,
+	)
+	if err != nil {
+		return fmt.Errorf("could not create migrate instance: %w", err)
 	}
-	log.Println("Migrations from file completed")
+
+	log.Println("Applying database migrations...")
+	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		return fmt.Errorf("an error occurred while migrating: %w", err)
+	}
+
+	log.Println("Database migrations applied successfully.")
 	return nil
 }
 
@@ -102,7 +115,7 @@ func (c *Container) initRepositories() {
 
 func (c *Container) initServices() {
 	c.RefreshTokenStore = repository.NewSQLiteRefreshTokenStore(c.DB)
-	c.UserSvc = service.NewUserService(c.UserRepo, c.Config, c.RefreshTokenStore)
+	c.UserSvc = service.NewUserService(c.UserRepo, c.Config, c.RefreshTokenStore, c.DB)
 
 	// Purge quotidienne + arrêt propre
 	ctx, cancel := context.WithCancel(context.Background())

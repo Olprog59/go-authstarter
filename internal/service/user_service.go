@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -32,15 +33,17 @@ type UserService struct {
 	emailSvc     *EmailService
 	userLocks    map[int64]*sync.Mutex
 	mapMutex     sync.Mutex
+	db           *sql.DB
 }
 
-func NewUserService(repo ports.UserRepository, conf *config.Config, refreshStore ports.RefreshTokenStore) *UserService {
+func NewUserService(repo ports.UserRepository, conf *config.Config, refreshStore ports.RefreshTokenStore, db *sql.DB) *UserService {
 	return &UserService{
 		repo:         repo,
 		conf:         conf,
 		refreshStore: refreshStore,
 		emailSvc:     NewEmailService(conf),
 		userLocks:    make(map[int64]*sync.Mutex),
+		db:           db,
 	}
 }
 
@@ -140,7 +143,6 @@ func (s *UserService) Login(email, password, ipHash, uaHash string) (*domain.Use
 		return nil, nil, ErrInvalidCredentials
 	}
 
-	// 🔐 Bloquer si email non vérifié
 	if !user.EmailVerified {
 		return nil, nil, errors.New("email not verified")
 	}
@@ -149,21 +151,38 @@ func (s *UserService) Login(email, password, ipHash, uaHash string) (*domain.Use
 		return nil, nil, ErrInvalidCredentials
 	}
 
-	// Verrouiller pour cet utilisateur spécifique pour éviter les race conditions
 	mu := s.getUserLock(user.ID)
 	mu.Lock()
 	defer mu.Unlock()
 
-	// Révoquer tous les anciens tokens
-	_ = s.refreshStore.RevokeAllForUser(user.ID)
-
-	// Générer une nouvelle paire de tokens
-	tokenPair, err := auth.GenerateTokenPair(user.ID, s.conf.Auth.JWTSecret, s.conf.Auth.AccessTokenDuration, s.conf.Auth.RefreshTokenDuration)
+	// --- Début de la transaction ---
+	ctx := context.Background()
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("génération tokens: %w", err)
+		return nil, nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	// Rollback en cas de panique ou d'erreur non gérée
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback()
+			panic(p) // re-panic après rollback
+		} else if err != nil {
+			_ = tx.Rollback() // err est non-nil, donc rollback
+		}
+	}()
+
+	// Utiliser le store transactionnel
+	txStore := s.refreshStore.WithTx(tx)
+
+	if err = txStore.RevokeAllForUser(user.ID); err != nil {
+		return nil, nil, fmt.Errorf("failed to revoke old tokens: %w", err)
 	}
 
-	// Construire l'entité de domaine pour le nouveau refresh token
+	tokenPair, err := auth.GenerateTokenPair(user.ID, s.conf.Auth.JWTSecret, s.conf.Auth.AccessTokenDuration, s.conf.Auth.RefreshTokenDuration)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to generate tokens: %w", err)
+	}
+
 	now := time.Now()
 	rt := &domain.RefreshToken{
 		Token:     tokenPair.RefreshToken,
@@ -175,14 +194,17 @@ func (s *UserService) Login(email, password, ipHash, uaHash string) (*domain.Use
 		UAHash:    uaHash,
 	}
 
-	// Sauvegarder le nouveau token
-	if err := s.refreshStore.Save(rt); err != nil {
-		return nil, nil, fmt.Errorf("stockage refresh token: %w", err)
+	if err = txStore.Save(rt); err != nil {
+		return nil, nil, fmt.Errorf("failed to save new token: %w", err)
 	}
 
-	// Attacher l’entité au user (optionnel)
-	user.Token = rt
+	// Tout s'est bien passé, on commit la transaction
+	if err = tx.Commit(); err != nil {
+		return nil, nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	// --- Fin de la transaction ---
 
+	user.Token = rt
 	return user, tokenPair, nil
 }
 

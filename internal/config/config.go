@@ -126,7 +126,12 @@ func LoadConfig() (*Config, error) {
 	v.SetEnvPrefix("APP")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
+
+	// Lier les variables d'environnement spécifiques
 	v.BindEnv("auth.jwt_secret", "JWT_SECRET")
+	v.BindEnv("database.dsn", "DATABASE_DSN")
+	v.BindEnv("smtp.username", "SMTP_USERNAME")
+	v.BindEnv("smtp.password", "SMTP_PASSWORD")
 
 	var cfg Config
 	err := v.Unmarshal(&cfg, func(c *mapstructure.DecoderConfig) {

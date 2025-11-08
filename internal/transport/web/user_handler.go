@@ -67,6 +67,24 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		Domain:   h.container.Config.Auth.CookieDomain,
 	})
 
+	// CSRF Token Cookie (Double Submit Cookie Pattern)
+	csrfToken, err := generateCSRFToken()
+	if err != nil {
+		slog.Error("failed to generate CSRF token", "err", err)
+		ErrorResponse(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "csrf_token",
+		Value:    csrfToken,
+		Path:     h.container.Config.Auth.CookiePath,
+		MaxAge:   int(h.container.Config.Auth.AccessTokenDuration.Seconds()), // Même durée que l'access token
+		HttpOnly: false, // Doit être accessible par JS
+		Secure:   h.container.Config.Auth.CookieSecure,
+		SameSite: http.SameSiteStrictMode,
+		Domain:   h.container.Config.Auth.CookieDomain,
+	})
+
 	jsonResponse(w, dto.UserLoginToDTO(user))
 }
 

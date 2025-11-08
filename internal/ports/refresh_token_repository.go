@@ -1,6 +1,7 @@
 package ports
 
 import (
+	"database/sql"
 	"errors"
 	"time"
 
@@ -15,4 +16,5 @@ type RefreshTokenStore interface {
 	Revoke(tokenString string) error
 	RevokeAllForUser(userID int64) error
 	PurgeExpired(before time.Time) error
+	WithTx(tx *sql.Tx) RefreshTokenStore
 }

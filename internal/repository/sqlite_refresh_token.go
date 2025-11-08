@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -12,17 +13,22 @@ import (
 	"github.com/Olprog59/go-fun/internal/ports"
 )
 
-var _ ports.RefreshTokenStore = (*SQLiteRefreshTokenStore)(nil)
+var _ ports.RefreshTokenStore = (*sqliteRefreshTokenStore)(nil)
 
-type SQLiteRefreshTokenStore struct {
-	DB *sql.DB
+type sqliteRefreshTokenStore struct {
+	db DBTX
 }
 
-func NewSQLiteRefreshTokenStore(db *sql.DB) *SQLiteRefreshTokenStore {
-	return &SQLiteRefreshTokenStore{DB: db}
+func NewSQLiteRefreshTokenStore(db *sql.DB) ports.RefreshTokenStore {
+	return &sqliteRefreshTokenStore{db: db}
 }
 
-func (s *SQLiteRefreshTokenStore) Save(t *domain.RefreshToken) error {
+// WithTx returns a new store that operates within the given transaction.
+func (s *sqliteRefreshTokenStore) WithTx(tx *sql.Tx) ports.RefreshTokenStore {
+	return &sqliteRefreshTokenStore{db: tx}
+}
+
+func (s *sqliteRefreshTokenStore) Save(t *domain.RefreshToken) error {
 	if t == nil {
 		return errors.New("the refrestoken is null")
 	}
@@ -35,7 +41,8 @@ func (s *SQLiteRefreshTokenStore) Save(t *domain.RefreshToken) error {
     INSERT INTO refresh_tokens(token, user_id, issue_at, expires_at, is_revoked)
     VALUES (?, ?, ?, ?, ?)
     `
-	_, err := s.DB.Exec(
+	_, err := s.db.ExecContext(
+		context.Background(),
 		query,
 		t.Token,
 		t.UserID,
@@ -46,7 +53,7 @@ func (s *SQLiteRefreshTokenStore) Save(t *domain.RefreshToken) error {
 	return err
 }
 
-func (s *SQLiteRefreshTokenStore) Get(tokenString string) (*domain.RefreshToken, error) {
+func (s *sqliteRefreshTokenStore) Get(tokenString string) (*domain.RefreshToken, error) {
 	const query = `
     SELECT token, user_id, issue_at, expires_at, is_revoked
     FROM refresh_tokens
@@ -55,7 +62,7 @@ func (s *SQLiteRefreshTokenStore) Get(tokenString string) (*domain.RefreshToken,
 	hashedToken := sha256.Sum256([]byte(tokenString))
 	hashed := hex.EncodeToString(hashedToken[:])
 
-	row := s.DB.QueryRow(query, hashed)
+	row := s.db.QueryRowContext(context.Background(), query, hashed)
 
 	var t domain.RefreshToken
 	if err := row.Scan(
@@ -65,7 +72,7 @@ func (s *SQLiteRefreshTokenStore) Get(tokenString string) (*domain.RefreshToken,
 		&t.ExpiresAt,
 		&t.IsRevoked,
 	); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ports.ErrNotFound
 		}
 		return nil, err
@@ -73,7 +80,7 @@ func (s *SQLiteRefreshTokenStore) Get(tokenString string) (*domain.RefreshToken,
 	return &t, nil
 }
 
-func (s *SQLiteRefreshTokenStore) Revoke(tokenString string) error {
+func (s *sqliteRefreshTokenStore) Revoke(tokenString string) error {
 	const query = `
     UPDATE refresh_tokens
     SET is_revoked = 1
@@ -82,26 +89,26 @@ func (s *SQLiteRefreshTokenStore) Revoke(tokenString string) error {
 	hashedToken := sha256.Sum256([]byte(tokenString))
 	hashed := hex.EncodeToString(hashedToken[:])
 
-	_, err := s.DB.Exec(query, hashed)
+	_, err := s.db.ExecContext(context.Background(), query, hashed)
 	return err
 }
 
-func (s *SQLiteRefreshTokenStore) RevokeAllForUser(userID int64) error {
+func (s *sqliteRefreshTokenStore) RevokeAllForUser(userID int64) error {
 	const query = `
     UPDATE refresh_tokens
     SET is_revoked = 1
     WHERE user_id = ?
     `
-	_, err := s.DB.Exec(query, userID)
+	_, err := s.db.ExecContext(context.Background(), query, userID)
 	return err
 }
 
-func (s *SQLiteRefreshTokenStore) PurgeExpired(before time.Time) error {
+func (s *sqliteRefreshTokenStore) PurgeExpired(before time.Time) error {
 	const query = `
     DELETE FROM refresh_tokens
     WHERE expires_at < ?
     `
-	res, err := s.DB.Exec(query, before)
+	res, err := s.db.ExecContext(context.Background(), query, before)
 	if err != nil {
 		return err
 	}

@@ -17,9 +17,9 @@ database:
 
 # JWT and Cookie configuration
 auth:
-  # JWT secret key. Use a long, random string in production.
-  # Can be overridden by the JWT_SECRET environment variable.
-  jwt_secret: "super_secret"
+  # JWT secret key. MUST be overridden by the JWT_SECRET environment variable in production.
+  # Generate a long, random string (e.g., using `openssl rand -base64 32`).
+  jwt_secret: ""
   # Access token duration (e.g., 15m, 1h)
   access_token_duration: 15m
   # Refresh token duration (e.g., 720h for 30 days)
