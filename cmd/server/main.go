@@ -26,26 +26,22 @@ func main() {
 }
 
 func run() error {
-	// Load configuration
+
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		return err
 	}
 
-	// Configurer le logger selon l'environnement
 	setupLogger(cfg)
 
-	// Afficher la configuration du rate limiter au démarrage
 	logStartupInfo(cfg)
 
-	// Initialize container with all dependencies
 	container, err := app.NewContainer(cfg)
 	if err != nil {
 		return err
 	}
 	defer container.Close()
 
-	// Setup HTTP server
 	handler := web.NewHandler(container)
 	mux := web.NewMux(handler, cfg)
 
@@ -57,11 +53,9 @@ func run() error {
 		IdleTimeout:  cfg.Server.IdleTimeout,
 	}
 
-	// Graceful shutdown
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Start server in goroutine
 	serverErr := make(chan error, 1)
 	go func() {
 		log.Printf("Server listening on %s", srv.Addr)
@@ -70,7 +64,6 @@ func run() error {
 		}
 	}()
 
-	// Wait for shutdown signal or server error
 	select {
 	case err := <-serverErr:
 		return err
@@ -78,7 +71,6 @@ func run() error {
 		log.Println("Shutdown signal received")
 	}
 
-	// Graceful shutdown with timeout
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -125,12 +117,12 @@ func setupLogger(conf *config.Config) {
 	var handler slog.Handler
 
 	if conf.IsProduction() {
-		// En production : JSON structuré, level INFO
+
 		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 			Level: slog.LevelInfo,
 		})
 	} else {
-		// En développement : texte coloré, level DEBUG
+
 		handler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 			Level: slog.LevelDebug,
 		})

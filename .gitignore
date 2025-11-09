@@ -424,3 +424,4 @@ tmp
 data.db
 data.sqlite*
 config.yaml
+remove_comments.go

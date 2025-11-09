@@ -33,7 +33,6 @@ func (s *sqliteRefreshTokenStore) Save(t *domain.RefreshToken) error {
 		return errors.New("the refrestoken is null")
 	}
 
-	// Stocke le hash, pas la valeur brute
 	hashedToken := sha256.Sum256([]byte(t.Token))
 	t.Token = hex.EncodeToString(hashedToken[:])
 

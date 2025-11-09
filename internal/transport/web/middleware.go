@@ -52,19 +52,16 @@ func NewMiddleware(conf *config.Config) *Middleware {
 		conf: conf,
 	}
 
-	// Initialiser les rate limiters seulement si activé
 	if conf.RateLimiter.Enabled {
-		// 1. Rate limiter global (basé sur la config)
+
 		mw.globalLimiter = NewRateLimiter(
 			conf.RateLimiter.RPS,
 			conf.RateLimiter.Burst,
 		)
 
-		// 2. Rate limiter strict pour les endpoints sensibles (auth)
 		strictRPS := conf.RateLimiter.RPS
 		strictBurst := conf.RateLimiter.Burst
 
-		// En production, on divise par 2 les limites pour l'auth
 		if conf.IsProduction() {
 			strictRPS = strictRPS / 2
 			if strictBurst > 2 {
@@ -73,7 +70,6 @@ func NewMiddleware(conf *config.Config) *Middleware {
 		}
 		mw.strictLimiter = NewRateLimiter(strictRPS, strictBurst)
 
-		// 3. Rate limiter par utilisateur (2x plus permissif)
 		userRPS := conf.RateLimiter.RPS * 2
 		userBurst := conf.RateLimiter.Burst * 2
 		mw.userLimiter = NewRateLimiter(userRPS, userBurst)
@@ -88,11 +84,10 @@ func (m *Middleware) Auth(next http.Handler) http.Handler {
 
 		var tokenStr string
 
-		// Tenter de récupérer le token depuis le cookie
 		if cookie, err := r.Cookie("access_token"); err == nil {
 			tokenStr = cookie.Value
 		} else {
-			// Sinon essayer le header Authorization Bearer
+
 			authorization := r.Header.Get("Authorization")
 			if !strings.HasPrefix(authorization, bearerPrefix) {
 				ErrorResponse(w, `{"error":"forbidden"}`, http.StatusUnauthorized)
@@ -154,15 +149,7 @@ func (m *Middleware) SecurityHeaders(next http.Handler) http.Handler {
 // CSRF est un middleware pour la protection contre les attaques CSRF via le pattern "Double Submit Cookie".
 func (m *Middleware) CSRF(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// On applique la protection uniquement pour les méthodes qui modifient l'état.
-		// GET, HEAD, OPTIONS, TRACE sont considérées comme sûres.
-		// switch r.Method {
-		// case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace:
-		// 	next.ServeHTTP(w, r)
-		// 	return
-		// }
 
-		// 1. Récupérer le token depuis le cookie
 		cookie, err := r.Cookie("csrf_token")
 		if err != nil {
 			slog.Warn("CSRF middleware: missing csrf_token cookie", "err", err)
@@ -171,17 +158,14 @@ func (m *Middleware) CSRF(next http.Handler) http.Handler {
 		}
 		cookieToken := cookie.Value
 
-		// 2. Récupérer le token depuis le header
 		headerToken := r.Header.Get("X-CSRF-Token")
 
-		// 3. Comparer les deux tokens
 		if cookieToken == "" || headerToken == "" || cookieToken != headerToken {
 			slog.Warn("CSRF token mismatch", "cookie_len", len(cookieToken), "header_len", len(headerToken))
 			ErrorResponse(w, "Forbidden", http.StatusForbidden)
 			return
 		}
 
-		// Les tokens correspondent, la requête est légitime.
 		next.ServeHTTP(w, r)
 	})
 }

@@ -63,7 +63,6 @@ func (c *Container) initDatabase() error {
 	db.SetMaxOpenConns(25)
 	db.SetMaxIdleConns(5)
 
-	// Ajustements perf/sécurité
 	exec := func(q string) {
 		if _, err := db.Exec(q); err != nil {
 			log.Printf("pragma failed (%s): %v", q, err)
@@ -77,7 +76,7 @@ func (c *Container) initDatabase() error {
 	exec("PRAGMA analysis_limit = 1000;")
 	exec("PRAGMA trusted_schema = OFF;")
 	exec("PRAGMA wal_autocheckpoint=1000;")
-	exec("PRAGMA cache_size=10000;") // négatif pour pages, positif pour KB
+	exec("PRAGMA cache_size=10000;")
 
 	if err := db.Ping(); err != nil {
 		db.Close()
@@ -121,9 +120,8 @@ func (c *Container) initServices() {
 	c.RefreshTokenStore = repository.NewSQLiteRefreshTokenStore(c.DB)
 	c.UserSvc = service.NewUserService(c.UserRepo, c.Config, c.RefreshTokenStore, c.DB)
 
-	// Purge quotidienne + arrêt propre
 	ctx, cancel := context.WithCancel(context.Background())
-	c.ctxCancel = cancel // ajoute `ctxCancel context.CancelFunc` dans struct Container
+	c.ctxCancel = cancel
 
 	go func() {
 		ticker := time.NewTicker(24 * time.Hour)

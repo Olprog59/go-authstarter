@@ -97,7 +97,6 @@ func LoadConfig() (*Config, error) {
 	v.SetConfigType("yaml")
 	v.AddConfigPath(".")
 
-	// Valeurs par défaut
 	v.SetDefault("server.port", "8080")
 	v.SetDefault("server.read_timeout", "10s")
 	v.SetDefault("server.write_timeout", "10s")
@@ -114,7 +113,6 @@ func LoadConfig() (*Config, error) {
 
 	v.SetDefault("email_verification.token_expiration", "24h")
 
-	// Rate limiter defaults - Plus permissif en dev
 	v.SetDefault("rate_limiter.rps", 10)
 	v.SetDefault("rate_limiter.burst", 20)
 	v.SetDefault("rate_limiter.enabled", true)
@@ -135,7 +133,6 @@ func LoadConfig() (*Config, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
-	// Lier les variables d'environnement spécifiques
 	v.BindEnv("auth.jwt_secret", "JWT_SECRET")
 	v.BindEnv("database.dsn", "DATABASE_DSN")
 	v.BindEnv("smtp.username", "SMTP_USERNAME")
@@ -151,7 +148,6 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 
-	// Validation
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -169,7 +165,6 @@ func (c *Config) Validate() error {
 		return errors.New("auth.jwt_secret is required")
 	}
 
-	// Validation stricte en production
 	if c.IsProduction() {
 		if len(c.Auth.JWTSecret) < 32 {
 			return errors.New("auth.jwt_secret must be ≥32 chars in production")

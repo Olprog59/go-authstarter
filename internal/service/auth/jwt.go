@@ -30,7 +30,6 @@ func GenerateTokenPair(userID int64, jwtKey string, accessTokenDuration, refresh
 		return nil, errors.New("JWT key trop faible")
 	}
 
-	// Générer l'access token (courte durée)
 	expiresAt := time.Now().Add(accessTokenDuration)
 	accessClaims := &jwt.RegisteredClaims{
 		Subject:   strconv.FormatInt(userID, 10),
@@ -46,7 +45,6 @@ func GenerateTokenPair(userID int64, jwtKey string, accessTokenDuration, refresh
 		return nil, err
 	}
 
-	// Générer le refresh token (longue durée, valeur aléatoire)
 	refreshToken, err := generateSecureToken()
 	if err != nil {
 		return nil, err
@@ -99,13 +97,12 @@ type RefreshTokenStore interface {
 
 // Fonction pour renouveler les tokens
 func RefreshTokens(refreshToken, jwtKey string, store RefreshTokenStore, accessTokenDuration, refreshTokenDuration time.Duration) (*TokenPair, error) {
-	// Vérifier le refresh token en base
+
 	tokenRecord, err := store.GetRefreshToken(refreshToken)
 	if err != nil {
 		return nil, errors.New("refresh token invalide")
 	}
 
-	// Vérifications de sécurité
 	if tokenRecord.IsRevoked {
 		return nil, errors.New("refresh token révoqué")
 	}
@@ -114,18 +111,15 @@ func RefreshTokens(refreshToken, jwtKey string, store RefreshTokenStore, accessT
 		return nil, errors.New("refresh token expiré")
 	}
 
-	// Rotation du token : révoquer l'ancien
 	if err := store.RevokeRefreshToken(refreshToken); err != nil {
 		return nil, err
 	}
 
-	// Générer une nouvelle paire de tokens
 	newTokenPair, err := GenerateTokenPair(tokenRecord.UserID, jwtKey, accessTokenDuration, refreshTokenDuration)
 	if err != nil {
 		return nil, err
 	}
 
-	// Sauvegarder le nouveau refresh token
 	err = store.SaveRefreshToken(
 		tokenRecord.UserID,
 		newTokenPair.RefreshToken,

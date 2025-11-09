@@ -24,7 +24,7 @@ func (r *sqliteUserRepo) Create(email, password string) (*domain.User, error) {
 	query := `INSERT INTO users (email, password) VALUES (?, ?)`
 	result, err := r.db.Exec(query, email, password)
 	if err != nil {
-		// vérification d'erreur spécifique à SQLite
+
 		return nil, wrapDBError(err)
 	}
 

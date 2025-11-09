@@ -36,7 +36,6 @@ func (e *EmailService) Send(ctx context.Context, to, subject, body string) error
 
 	addr := fmt.Sprintf("%s:%d", e.cfg.SMTP.Host, e.cfg.SMTP.Port)
 
-	// En dev avec MailDev (auth & TLS désactivés)
 	if e.cfg.SMTP.Host == "localhost" && e.cfg.SMTP.Port == 1025 {
 		ch := make(chan error, 1)
 		go func() {
@@ -50,7 +49,6 @@ func (e *EmailService) Send(ctx context.Context, to, subject, body string) error
 		}
 	}
 
-	// En prod : TLS obligatoire
 	tlsConfig := &tls.Config{
 		ServerName: e.cfg.SMTP.Host,
 		MinVersion: tls.VersionTLS12,

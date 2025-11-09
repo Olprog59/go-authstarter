@@ -45,7 +45,6 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Cookies HTTP-only
 	http.SetCookie(w, &http.Cookie{
 		Name:     "access_token",
 		Value:    tokenPair.AccessToken,
@@ -67,7 +66,6 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		Domain:   h.container.Config.Auth.CookieDomain,
 	})
 
-	// CSRF Token Cookie (Double Submit Cookie Pattern)
 	csrfToken, err := generateCSRFToken()
 	if err != nil {
 		slog.Error("failed to generate CSRF token", "err", err)
@@ -78,8 +76,8 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		Name:     "csrf_token",
 		Value:    csrfToken,
 		Path:     h.container.Config.Auth.CookiePath,
-		MaxAge:   int(h.container.Config.Auth.AccessTokenDuration.Seconds()), // Même durée que l'access token
-		HttpOnly: false,                                                      // Doit être accessible par JS
+		MaxAge:   int(h.container.Config.Auth.AccessTokenDuration.Seconds()),
+		HttpOnly: false,
 		Secure:   h.container.Config.Auth.CookieSecure,
 		SameSite: http.SameSiteStrictMode,
 		Domain:   h.container.Config.Auth.CookieDomain,
@@ -115,7 +113,6 @@ func (h *Handler) ResendVerification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Appel service (toujours succès apparent)
 	_ = h.container.UserSvc.ResendVerification(req.Email)
 
 	w.WriteHeader(http.StatusOK)
@@ -137,14 +134,12 @@ func (h *Handler) RefreshToken(w http.ResponseWriter, r *http.Request) {
 	ipHash := sha256hex(r.RemoteAddr)
 	uaHash := sha256hex(r.Header.Get("User-Agent"))
 
-	// Appel au service pour renouveler les tokens
 	tokenPair, err := h.container.UserSvc.RefreshToken(req.RefreshToken, ipHash, uaHash)
 	if err != nil {
 		ErrorResponse(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
 
-	// Mettre à jour les cookies HttpOnly
 	http.SetCookie(w, &http.Cookie{
 		Name:     "access_token",
 		Value:    tokenPair.AccessToken,
@@ -167,12 +162,11 @@ func (h *Handler) RefreshToken(w http.ResponseWriter, r *http.Request) {
 		Domain:   h.container.Config.Auth.CookieDomain,
 	})
 
-	// Répondre avec les tokens en JSON au cas où front voudrait aussi les capturer
 	jsonResponse(w, tokenPair)
 }
 
 func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
-	// Le middleware Auth a déjà validé le token et placé les claims dans le contexte.
+
 	claims, ok := r.Context().Value(ClaimsContextKey).(*jwt.RegisteredClaims)
 	if !ok {
 		ErrorResponse(w, "Token invalide ou expiré", http.StatusUnauthorized)
@@ -201,7 +195,6 @@ func (h *Handler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mettre à jour dans la DB
 	err := h.container.UserRepo.UpdateDBVerify(token)
 	if err != nil {
 		ErrorResponse(w, "invalid or expired token", http.StatusBadRequest)

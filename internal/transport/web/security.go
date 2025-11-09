@@ -8,7 +8,7 @@ import (
 
 // generateCSRFToken crée un token anti-CSRF sécurisé.
 func generateCSRFToken() (string, error) {
-	b := make([]byte, 32) // 32 bytes = 256 bits de données aléatoires
+	b := make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, b); err != nil {
 		return "", err
 	}

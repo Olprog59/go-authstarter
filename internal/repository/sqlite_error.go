@@ -29,16 +29,16 @@ func wrapDBError(err error) error {
 			case sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY:
 				return ErrDup
 			case sqlite3.SQLITE_BUSY:
-				// Gestion de la base de données occupée (ex: verrouillage)
+
 				log.Printf("Database is busy: %s", liteErr.Error())
 				return ErrBusy
 			case sqlite3.SQLITE_LOCKED:
-				// Gestion de la base de données verrouillée
+
 				log.Printf("Database is locked: %s", liteErr.Error())
 				return ErrLocked
-				// Ajouter d'autres cas spécifiques si nécessaire
+
 			}
-			// Pour les autres erreurs, on peut logger le code pour le débogage
+
 			log.Printf("SQLite error code: %d, message: %s", code, liteErr.Error())
 		}
 	}

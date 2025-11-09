@@ -36,7 +36,6 @@ func NewRateLimiter(rps float64, burst int) *RateLimiter {
 		burst:    burst,
 	}
 
-	// Nettoyage automatique toutes les 5 minutes
 	go rl.cleanupVisitors()
 
 	return rl
@@ -78,22 +77,20 @@ func (rl *RateLimiter) cleanupVisitors() {
 
 // getIP extrait l'IP réelle du client
 func getIP(r *http.Request) string {
-	// Vérifier X-Forwarded-For (proxy/load balancer)
+
 	forwarded := r.Header.Get("X-Forwarded-For")
 	if forwarded != "" {
-		// Prendre la première IP (client original)
+
 		if ip, _, err := net.SplitHostPort(forwarded); err == nil {
 			return ip
 		}
 		return forwarded
 	}
 
-	// Vérifier X-Real-IP
 	if ip := r.Header.Get("X-Real-IP"); ip != "" {
 		return ip
 	}
 
-	// Utiliser RemoteAddr en dernier recours
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
@@ -110,7 +107,7 @@ func hashIP(ip string) string {
 // Middleware RateLimit pour votre application
 func (mw *Middleware) RateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Vérifier si le rate limiter est activé
+
 		if !mw.conf.RateLimiter.Enabled {
 			next.ServeHTTP(w, r)
 			return
@@ -156,10 +153,9 @@ func (mw *Middleware) RateLimitByUser(next http.Handler) http.Handler {
 			return
 		}
 
-		// Extraire l'ID utilisateur du contexte (après Auth middleware)
 		userID, ok := r.Context().Value("userID").(int64)
 		if !ok {
-			// Si pas d'userID, utiliser l'IP
+
 			ip := getIP(r)
 			ipHash := hashIP(ip)
 
@@ -168,7 +164,7 @@ func (mw *Middleware) RateLimitByUser(next http.Handler) http.Handler {
 				return
 			}
 		} else {
-			// Rate limit par user ID
+
 			userKey := fmt.Sprintf("user_%d", userID)
 			if !mw.userLimiter.getVisitor(userKey).Allow() {
 				sendRateLimitErrorAdvanced(w, "Too many requests. Please try again later.", 60)
@@ -193,7 +189,7 @@ type RateLimitErrorResponse struct {
 func sendRateLimitErrorAdvanced(w http.ResponseWriter, message string, retryAfter int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-RateLimit-Retry-After", fmt.Sprintf("%d", retryAfter))
-	w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter)) // Header HTTP standard
+	w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
 	w.WriteHeader(http.StatusTooManyRequests)
 
 	response := RateLimitErrorResponse{

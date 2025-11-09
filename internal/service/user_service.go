@@ -78,7 +78,6 @@ func (s *UserService) Auth(email, password string) (*domain.User, error) {
 		return nil, ErrInvalidCredentials
 	}
 
-	// 🔐 Bloquer si email non vérifié
 	if !u.EmailVerified {
 		return nil, errors.New("email not verified")
 	}
@@ -102,7 +101,6 @@ func (s *UserService) Register(email, password string) (*domain.User, error) {
 		return nil, errors.New("password must be ≥8 chars with upper, lower, digit, special")
 	}
 
-	// Vérifier si email déjà utilisé
 	if _, err := s.repo.GetByEmail(email); err == nil {
 		return nil, errors.New("email already registered")
 	} else if !errors.Is(err, ports.ErrNotFound) && !errors.Is(err, repository.ErrNoRecord) {
@@ -125,7 +123,6 @@ func (s *UserService) Register(email, password string) (*domain.User, error) {
 
 	log.Println(user.VerificationToken)
 
-	// Envoi async de l’email de vérification
 	s.sendVerificationEmailAsync(user.Email, user.VerificationToken)
 
 	return user, nil
@@ -149,23 +146,21 @@ func (s *UserService) Login(email, password, ipHash, uaHash string) (*domain.Use
 	mu.Lock()
 	defer mu.Unlock()
 
-	// --- Début de la transaction ---
 	ctx := context.Background()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	// Rollback en cas de panique ou d'erreur non gérée
+
 	defer func() {
 		if p := recover(); p != nil {
 			_ = tx.Rollback()
-			panic(p) // re-panic après rollback
+			panic(p)
 		} else if err != nil {
-			_ = tx.Rollback() // err est non-nil, donc rollback
+			_ = tx.Rollback()
 		}
 	}()
 
-	// Utiliser le store transactionnel
 	txStore := s.refreshStore.WithTx(tx)
 
 	if err = txStore.RevokeAllForUser(user.ID); err != nil {
@@ -192,11 +187,9 @@ func (s *UserService) Login(email, password, ipHash, uaHash string) (*domain.Use
 		return nil, nil, fmt.Errorf("failed to save new token: %w", err)
 	}
 
-	// Tout s'est bien passé, on commit la transaction
 	if err = tx.Commit(); err != nil {
 		return nil, nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
-	// --- Fin de la transaction ---
 
 	user.Token = rt
 	return user, tokenPair, nil
@@ -215,31 +208,27 @@ func (s *UserService) ListUsers() ([]*domain.User, error) {
 }
 
 func (s *UserService) RefreshToken(refreshToken, ipHash, uaHash string) (*auth.TokenPair, error) {
-	// Récupérer le token stocké
+
 	storedToken, err := s.refreshStore.Get(refreshToken)
 	if err != nil {
 		return nil, fmt.Errorf("refresh token invalide ou introuvable")
 	}
 
-	// Vérifier si le token est révoqué ou expiré
 	if storedToken.IsRevoked || time.Now().After(storedToken.ExpiresAt) {
 		return nil, fmt.Errorf("refresh token expiré ou révoqué")
 	}
 
 	userID := storedToken.UserID
 
-	// Rotation du refresh token : révoquer l'ancien
 	if err = s.refreshStore.Revoke(refreshToken); err != nil {
 		return nil, fmt.Errorf("échec révocation refresh token")
 	}
 
-	// Générer une nouvelle paire de tokens
 	tokenPair, err := auth.GenerateTokenPair(userID, s.conf.Auth.JWTSecret, s.conf.Auth.AccessTokenDuration, s.conf.Auth.RefreshTokenDuration)
 	if err != nil {
 		return nil, fmt.Errorf("génération token impossible")
 	}
 
-	// Sauvegarder le nouveau refresh token
 	now := time.Now()
 	newRefreshToken := &domain.RefreshToken{
 		Token:     tokenPair.RefreshToken,
@@ -301,46 +290,41 @@ func isStrongPassword(pw string) bool {
 
 // ResendVerification renvoie l'email de vérification
 func (s *UserService) ResendVerification(email string) error {
-	// Validation basique
+
 	if !isValidEmail(email) {
 		return errors.New("invalid email format")
 	}
 
-	// Récupérer l'utilisateur
 	user, err := s.repo.GetByEmail(email)
 	if err != nil {
-		// ⚠️ Timing-safe : Ne pas révéler si l'email existe
+
 		time.Sleep(200 * time.Millisecond)
-		return nil // Succès apparent
+		return nil
 	}
 
-	// Déjà vérifié ? → Succès silencieux
 	if user.EmailVerified {
 		return nil
 	}
 
-	// Token encore "frais" si < 20% du temps écoulé
 	tokenAge := time.Since(user.VerificationExpiresAt.Add(-s.conf.EmailVerification.TokenExpiration))
-	tokenFreshnessThreshold := s.conf.EmailVerification.TokenExpiration * 20 / 100 // 20%
+	tokenFreshnessThreshold := s.conf.EmailVerification.TokenExpiration * 20 / 100
 
 	if user.VerificationToken != "" &&
 		tokenAge < tokenFreshnessThreshold &&
 		time.Now().Before(user.VerificationExpiresAt) {
-		// Token frais, on le renvoie
+
 		s.sendVerificationEmailAsync(user.Email, user.VerificationToken)
 		return nil
 	}
 
-	// Régénérer token + mise à jour BDD
 	token := uuid.New().String()
-	expiresAt := time.Now().Add(s.conf.EmailVerification.TokenExpiration) // Dynamique)
+	expiresAt := time.Now().Add(s.conf.EmailVerification.TokenExpiration)
 
 	if err := s.repo.UpdateDBSendEmail(token, expiresAt, user.ID); err != nil {
 		slog.Error("Failed to update verification token", "err", err)
-		return nil // Ne pas révéler l'erreur
+		return nil
 	}
 
-	// Envoi async
 	s.sendVerificationEmailAsync(email, token)
 
 	return nil
@@ -351,7 +335,6 @@ func (s *UserService) sendVerificationEmailAsync(email, token string) {
 	go func() {
 		link := fmt.Sprintf("%s/verify?token=%s", s.conf.Server.BaseURL, token)
 
-		// Données pour le template
 		data := struct {
 			Email      string
 			VerifyLink string
@@ -399,7 +382,6 @@ func formatDurationFR(d time.Duration) string {
 		return fmt.Sprintf("%d minute%s", minutes, plural(minutes))
 	}
 
-	// Moins d'une minute
 	seconds := int(d.Seconds())
 	return fmt.Sprintf("%d seconde%s", seconds, plural(seconds))
 }
