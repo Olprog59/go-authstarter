@@ -13,22 +13,28 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// RateLimiter structure pour gérer les limiteurs par IP
+// RateLimiter manages rate limiters for visitors based on their IP address or user ID.
+// It uses a map to store a `Visitor` object for each unique identifier.
 type RateLimiter struct {
-	visitors map[string]*Visitor
-	mu       sync.RWMutex
-	rate     rate.Limit // requêtes par seconde
-	burst    int        // capacité du bucket
+	visitors map[string]*Visitor // Map of visitors, keyed by a unique identifier (e.g., IP hash or user ID).
+	mu       sync.RWMutex        // Read-write mutex to protect concurrent access to the visitors map.
+	rate     rate.Limit          // The number of requests allowed per second.
+	burst    int                 // The maximum burst of requests allowed.
 }
 
-// Visitor représente un visiteur avec son limiteur
+// Visitor represents a single visitor (e.g., an IP address or user) and their associated rate limiter.
 type Visitor struct {
-	limiter  *rate.Limiter
-	lastSeen time.Time
+	limiter  *rate.Limiter // The actual rate limiter for this visitor.
+	lastSeen time.Time     // The last time this visitor made a request.
 }
 
-// NewRateLimiter crée un nouveau rate limiter
-// rps = requêtes par seconde, burst = nombre de requêtes simultanées autorisées
+// NewRateLimiter creates and returns a new RateLimiter.
+// It initializes the visitors map and starts a background goroutine to clean up
+// inactive visitors periodically.
+//
+// Parameters:
+//   - rps: Requests per second allowed for each visitor.
+//   - burst: The maximum burst of requests allowed.
 func NewRateLimiter(rps float64, burst int) *RateLimiter {
 	rl := &RateLimiter{
 		visitors: make(map[string]*Visitor),
@@ -41,7 +47,9 @@ func NewRateLimiter(rps float64, burst int) *RateLimiter {
 	return rl
 }
 
-// getVisitor récupère ou crée un visiteur pour une IP donnée
+// getVisitor retrieves or creates a rate limiter for a given identifier (e.g., IP hash).
+// If a visitor does not exist in the map, a new one is created with a new rate limiter.
+// The `lastSeen` time for the visitor is updated on each call.
 func (rl *RateLimiter) getVisitor(ip string) *rate.Limiter {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
@@ -60,7 +68,10 @@ func (rl *RateLimiter) getVisitor(ip string) *rate.Limiter {
 	return v.limiter
 }
 
-// cleanupVisitors supprime les visiteurs inactifs depuis plus de 3 minutes
+// cleanupVisitors is a background task that runs in a goroutine to periodically
+// remove inactive visitors from the map. This prevents the map from growing
+// indefinitely and consuming too much memory. A visitor is considered inactive
+// if they haven't been seen for more than 3 minutes.
 func (rl *RateLimiter) cleanupVisitors() {
 	for {
 		time.Sleep(5 * time.Minute)
@@ -75,22 +86,26 @@ func (rl *RateLimiter) cleanupVisitors() {
 	}
 }
 
-// getIP extrait l'IP réelle du client
+// getIP extracts the real client IP address from the request.
+// It checks common headers used by reverse proxies (`X-Forwarded-For`, `X-Real-IP`)
+// before falling back to the `RemoteAddr` field of the request.
 func getIP(r *http.Request) string {
-
+	// Check for the X-Forwarded-For header, which can contain a comma-separated list of IPs.
 	forwarded := r.Header.Get("X-Forwarded-For")
 	if forwarded != "" {
-
+		// The client's IP is typically the first one in the list.
 		if ip, _, err := net.SplitHostPort(forwarded); err == nil {
 			return ip
 		}
 		return forwarded
 	}
 
+	// Check for the X-Real-IP header.
 	if ip := r.Header.Get("X-Real-IP"); ip != "" {
 		return ip
 	}
 
+	// Fallback to the RemoteAddr field.
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
@@ -98,16 +113,19 @@ func getIP(r *http.Request) string {
 	return ip
 }
 
-// hashIP crée un hash de l'IP pour éviter de stocker les IPs en clair
+// hashIP creates a SHA-256 hash of an IP address to avoid storing raw IP addresses.
+// This is a privacy-enhancing measure.
 func hashIP(ip string) string {
 	h := sha256.Sum256([]byte(ip))
 	return hex.EncodeToString(h[:])
 }
 
-// Middleware RateLimit pour votre application
+// RateLimit is a middleware that applies a global rate limit to all incoming requests.
+// It uses the client's IP address as the identifier for rate limiting.
+// If the rate limiter is disabled in the configuration, the middleware does nothing.
 func (mw *Middleware) RateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-
+		// Bypass if the rate limiter is disabled.
 		if !mw.conf.RateLimiter.Enabled {
 			next.ServeHTTP(w, r)
 			return
@@ -116,6 +134,7 @@ func (mw *Middleware) RateLimit(next http.Handler) http.Handler {
 		ip := getIP(r)
 		ipHash := hashIP(ip)
 
+		// Check if the request is allowed by the global rate limiter.
 		if !mw.globalLimiter.getVisitor(ipHash).Allow() {
 			sendRateLimitErrorAdvanced(w, "Too many requests. Please try again later.", 60)
 			return
@@ -125,7 +144,9 @@ func (mw *Middleware) RateLimit(next http.Handler) http.Handler {
 	})
 }
 
-// RateLimitStrict - Version plus stricte pour les endpoints sensibles (auth)
+// RateLimitStrict is a middleware that applies a stricter rate limit, typically
+// used for sensitive endpoints like authentication (login, register).
+// It uses a separate, more restrictive rate limiter (`strictLimiter`).
 func (mw *Middleware) RateLimitStrict(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !mw.conf.RateLimiter.Enabled {
@@ -136,6 +157,7 @@ func (mw *Middleware) RateLimitStrict(next http.Handler) http.Handler {
 		ip := getIP(r)
 		ipHash := hashIP(ip)
 
+		// Check if the request is allowed by the strict rate limiter.
 		if !mw.strictLimiter.getVisitor(ipHash).Allow() {
 			sendRateLimitErrorAdvanced(w, "Too many requests. Please try again later.", 60)
 			return
@@ -145,7 +167,9 @@ func (mw *Middleware) RateLimitStrict(next http.Handler) http.Handler {
 	})
 }
 
-// RateLimitByUser - Rate limit par utilisateur authentifié
+// RateLimitByUser is a middleware that applies a rate limit based on the authenticated user's ID.
+// If the user is not authenticated, it falls back to rate limiting by IP address.
+// This allows for more permissive limits for authenticated users compared to anonymous traffic.
 func (mw *Middleware) RateLimitByUser(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !mw.conf.RateLimiter.Enabled {
@@ -153,9 +177,10 @@ func (mw *Middleware) RateLimitByUser(next http.Handler) http.Handler {
 			return
 		}
 
+		// Try to get the user ID from the context.
 		userID, ok := r.Context().Value("userID").(int64)
 		if !ok {
-
+			// If the user is not authenticated, fall back to IP-based rate limiting.
 			ip := getIP(r)
 			ipHash := hashIP(ip)
 
@@ -164,7 +189,7 @@ func (mw *Middleware) RateLimitByUser(next http.Handler) http.Handler {
 				return
 			}
 		} else {
-
+			// If the user is authenticated, use their user ID as the key.
 			userKey := fmt.Sprintf("user_%d", userID)
 			if !mw.userLimiter.getVisitor(userKey).Allow() {
 				sendRateLimitErrorAdvanced(w, "Too many requests. Please try again later.", 60)
@@ -176,16 +201,19 @@ func (mw *Middleware) RateLimitByUser(next http.Handler) http.Handler {
 	})
 }
 
-// RateLimitErrorResponse structure enrichie pour les erreurs de rate limiting
+// RateLimitErrorResponse defines a structured response for rate limiting errors.
+// It provides more context to the client than a simple error message.
 type RateLimitErrorResponse struct {
-	Error      string    `json:"error"`
-	Message    string    `json:"message"`
-	Code       int       `json:"code"`
-	RetryAfter int       `json:"retry_after_seconds"` // Temps d'attente suggéré
-	Timestamp  time.Time `json:"timestamp"`
+	Error      string    `json:"error"`                 // A machine-readable error code.
+	Message    string    `json:"message"`               // A human-readable error message.
+	Code       int       `json:"code"`                  // The HTTP status code.
+	RetryAfter int       `json:"retry_after_seconds"` // Suggested time to wait before retrying, in seconds.
+	Timestamp  time.Time `json:"timestamp"`             // The timestamp of when the error occurred.
 }
 
-// sendRateLimitErrorAdvanced envoie une réponse JSON enrichie
+// sendRateLimitErrorAdvanced sends a detailed JSON response when a rate limit is exceeded.
+// It sets the HTTP status to 429 Too Many Requests and includes a structured JSON body
+// with details about the error and a suggested retry time.
 func sendRateLimitErrorAdvanced(w http.ResponseWriter, message string, retryAfter int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-RateLimit-Retry-After", fmt.Sprintf("%d", retryAfter))
@@ -203,14 +231,16 @@ func sendRateLimitErrorAdvanced(w http.ResponseWriter, message string, retryAfte
 	json.NewEncoder(w).Encode(response)
 }
 
-// Version avec tracking des limites (optionnel, pour afficher les quotas restants)
+// RateLimitHeaders represents the standard rate limit headers included in API responses.
+// This provides clients with information about their current rate limit status.
 type RateLimitHeaders struct {
-	Limit     int `json:"limit"`     // Nombre total de requêtes autorisées
-	Remaining int `json:"remaining"` // Requêtes restantes
-	Reset     int `json:"reset"`     // Timestamp de reset (epoch)
+	Limit     int `json:"limit"`     // The total number of requests allowed in the current window.
+	Remaining int `json:"remaining"` // The number of requests remaining in the current window.
+	Reset     int `json:"reset"`     // The timestamp (in epoch seconds) when the rate limit window resets.
 }
 
-// addRateLimitHeaders ajoute des headers informatifs (comme GitHub API)
+// addRateLimitHeaders adds informative rate limit headers to the HTTP response,
+// similar to the headers used by the GitHub API.
 func addRateLimitHeaders(w http.ResponseWriter, limit, remaining, resetTime int) {
 	w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", limit))
 	w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))

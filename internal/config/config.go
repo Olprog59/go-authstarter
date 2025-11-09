@@ -10,93 +10,114 @@ import (
 )
 
 // Config holds all configuration for the application.
+// It is the root structure that aggregates various configuration sections
+// such as server settings, database connection, authentication parameters,
+// email verification, CORS policies, rate limiting, and SMTP details.
+// Each field is tagged with `mapstructure` to facilitate unmarshaling
+// from configuration files (e.g., YAML) or environment variables.
 type Config struct {
-	Server            ServerConfig      `mapstructure:"server"`
-	Environment       string            `mapstructure:"environment"`
-	Database          DatabaseConfig    `mapstructure:"database"`
-	Auth              AuthConfig        `mapstructure:"auth"`
-	EmailVerification EmailVerification `mapstructure:"email_verification"`
-	Cors              CorsConfig        `mapstructure:"cors"`
-	RateLimiter       RateLimiterConfig `mapstructure:"rate_limiter"`
-	SMTP              SMTPConfig        `mapstructure:"smtp"`
+	Server            ServerConfig      `mapstructure:"server"`             // Server-specific settings like port, timeouts, and base URL.
+	Environment       string            `mapstructure:"environment"`        // The application's running environment (e.g., "development", "production").
+	Database          DatabaseConfig    `mapstructure:"database"`           // Database connection string and related settings.
+	Auth              AuthConfig        `mapstructure:"auth"`               // Authentication parameters, including JWT secrets and cookie settings.
+	EmailVerification EmailVerification `mapstructure:"email_verification"` // Settings for email verification tokens.
+	Cors              CorsConfig        `mapstructure:"cors"`               // Cross-Origin Resource Sharing policies.
+	RateLimiter       RateLimiterConfig `mapstructure:"rate_limiter"`       // Configuration for API rate limiting.
+	SMTP              SMTPConfig        `mapstructure:"smtp"`               // SMTP server details for sending emails.
 }
 
 // ServerConfig holds server-specific configuration.
 type ServerConfig struct {
-	Port         string        `mapstructure:"port"`
-	ReadTimeout  time.Duration `mapstructure:"read_timeout"`
-	WriteTimeout time.Duration `mapstructure:"write_timeout"`
-	IdleTimeout  time.Duration `mapstructure:"idle_timeout"`
-	BaseURL      string        `mapstructure:"base_url"`
+	Port         string        `mapstructure:"port"`          // The port on which the HTTP server will listen.
+	ReadTimeout  time.Duration `mapstructure:"read_timeout"`  // Maximum duration for reading the entire request, including the body.
+	WriteTimeout time.Duration `mapstructure:"write_timeout"` // Maximum duration before timing out writes of the response.
+	IdleTimeout  time.Duration `mapstructure:"idle_timeout"`  // Maximum amount of time to wait for the next request when keep-alives are enabled.
+	BaseURL      string        `mapstructure:"base_url"`      // The base URL of the application, used for constructing links (e.g., email verification).
 }
 
+// EmailVerification holds configuration specific to email verification tokens.
 type EmailVerification struct {
-	TokenExpiration time.Duration `mapstructure:"token_expiration"`
+	TokenExpiration time.Duration `mapstructure:"token_expiration"` // The duration for which an email verification token is valid.
 }
 
 // DatabaseConfig holds database-specific configuration.
 type DatabaseConfig struct {
-	DSN string `mapstructure:"dsn"`
+	DSN string `mapstructure:"dsn"` // Data Source Name for connecting to the database (e.g., SQLite file path).
 }
 
 // AuthConfig holds authentication-specific configuration (JWT, cookies).
 type AuthConfig struct {
-	JWTSecret            string        `mapstructure:"jwt_secret"`
-	AccessTokenDuration  time.Duration `mapstructure:"access_token_duration"`
-	RefreshTokenDuration time.Duration `mapstructure:"refresh_token_duration"`
-	CookieDomain         string        `mapstructure:"cookie_domain"`
-	CookiePath           string        `mapstructure:"cookie_path"`
-	CookieSecure         bool          `mapstructure:"cookie_secure"`
+	JWTSecret            string        `mapstructure:"jwt_secret"`             // The secret key used for signing and verifying JSON Web Tokens.
+	AccessTokenDuration  time.Duration `mapstructure:"access_token_duration"`  // The validity duration for access tokens.
+	RefreshTokenDuration time.Duration `mapstructure:"refresh_token_duration"` // The validity duration for refresh tokens.
+	CookieDomain         string        `mapstructure:"cookie_domain"`          // The domain for which authentication cookies are valid.
+	CookiePath           string        `mapstructure:"cookie_path"`            // The path for which authentication cookies are valid.
+	CookieSecure         bool          `mapstructure:"cookie_secure"`          // Flag to indicate if cookies should only be sent over HTTPS.
 }
 
 // CorsConfig holds CORS-specific configuration.
 type CorsConfig struct {
-	AllowedOrigins []string `mapstructure:"allowed_origins"`
+	AllowedOrigins []string `mapstructure:"allowed_origins"` // A list of origins that are allowed to make cross-origin requests.
 }
 
 // RateLimiterConfig holds rate limiter-specific configuration.
 type RateLimiterConfig struct {
-	RPS     float64 `mapstructure:"rps"`
-	Burst   int     `mapstructure:"burst"`
-	Enabled bool    `mapstructure:"enabled"`
+	RPS     float64 `mapstructure:"rps"`     // Requests per second allowed for the rate limiter.
+	Burst   int     `mapstructure:"burst"`   // The maximum burst of requests allowed above the RPS limit.
+	Enabled bool    `mapstructure:"enabled"` // Flag to enable or disable the rate limiter.
 }
 
 // SMTPConfig holds SMTP server configuration.
 type SMTPConfig struct {
-	Host     string `mapstructure:"host"`
-	Port     int    `mapstructure:"port"`
-	Username string `mapstructure:"username"`
-	Password string `mapstructure:"password"`
-	From     string `mapstructure:"from"`
+	Host     string `mapstructure:"host"`     // The hostname or IP address of the SMTP server.
+	Port     int    `mapstructure:"port"`     // The port number for the SMTP server.
+	Username string `mapstructure:"username"` // The username for SMTP authentication.
+	Password string `mapstructure:"password"` // The password for SMTP authentication.
+	From     string `mapstructure:"from"`     // The "From" email address for outgoing emails.
 }
 
-// IsProduction returns true if the environment is production.
+// IsProduction returns true if the application's environment is set to "production".
 func (c *Config) IsProduction() bool {
 	return c.Environment == "production"
 }
 
-// IsProd returns true if the environment is production (alias).
+// IsProd is an alias for IsProduction, returning true if the environment is "production".
 func (c *Config) IsProd() bool {
 	return c.IsProduction()
 }
 
-// IsDevelopment returns true if the environment is development.
+// IsDevelopment returns true if the application's environment is set to "development".
 func (c *Config) IsDevelopment() bool {
 	return c.Environment == "development"
 }
 
-// IsDev returns true if the environment is development (alias).
+// IsDev is an alias for IsDevelopment, returning true if the environment is "development".
 func (c *Config) IsDev() bool {
 	return c.IsDevelopment()
 }
 
-// LoadConfig reads configuration from file or environment variables.
+// LoadConfig reads configuration from a YAML file named "config.yaml" (or "config.yml")
+// in the current directory, and then overrides values with environment variables.
+//
+// The function sets default values for all configuration fields, ensuring the application
+// can run even without a configuration file or explicit environment variables.
+// Environment variables are prefixed with "APP_" and use underscores instead of dots
+// (e.g., `APP_SERVER_PORT` for `server.port`).
+//
+// It also includes a custom decode hook to correctly parse time.Duration strings.
+// After loading, it performs a validation check on the loaded configuration.
+//
+// Returns:
+//   - A pointer to the loaded `Config` struct.
+//   - An error if the configuration file cannot be read (unless it's just missing),
+//     unmarshaling fails, or validation fails.
 func LoadConfig() (*Config, error) {
 	v := viper.New()
 	v.SetConfigName("config")
 	v.SetConfigType("yaml")
 	v.AddConfigPath(".")
 
+	// Default values
 	v.SetDefault("server.port", "8080")
 	v.SetDefault("server.read_timeout", "10s")
 	v.SetDefault("server.write_timeout", "10s")
@@ -113,6 +134,7 @@ func LoadConfig() (*Config, error) {
 
 	v.SetDefault("email_verification.token_expiration", "24h")
 
+	// Rate limiter defaults - More permissive in dev
 	v.SetDefault("rate_limiter.rps", 10)
 	v.SetDefault("rate_limiter.burst", 20)
 	v.SetDefault("rate_limiter.enabled", true)
@@ -133,6 +155,7 @@ func LoadConfig() (*Config, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
+	// Bind specific environment variables
 	v.BindEnv("auth.jwt_secret", "JWT_SECRET")
 	v.BindEnv("database.dsn", "DATABASE_DSN")
 	v.BindEnv("smtp.username", "SMTP_USERNAME")
@@ -148,6 +171,7 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 
+	// Validation
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -155,7 +179,21 @@ func LoadConfig() (*Config, error) {
 	return &cfg, nil
 }
 
-// Validate vérifie que la configuration est valide
+// Validate checks that the loaded configuration is valid and meets all necessary requirements.
+// It performs both general validation and environment-specific checks.
+//
+// Key validation rules include:
+// - Server port and JWT secret are mandatory.
+// - In "production" environment:
+//   - JWT secret must be at least 32 characters long for cryptographic strength.
+//   - Cookies must be marked as secure (HTTPS only).
+//   - Database DSN is required.
+// - Access and refresh token durations must be positive.
+// - If rate limiting is enabled, RPS (requests per second) and burst values must be positive.
+//
+// Returns:
+//   - An error if any validation rule is violated, providing a descriptive message.
+//   - `nil` if the configuration is valid.
 func (c *Config) Validate() error {
 	if c.Server.Port == "" {
 		return errors.New("server.port is required")
@@ -165,6 +203,7 @@ func (c *Config) Validate() error {
 		return errors.New("auth.jwt_secret is required")
 	}
 
+	// Strict validation in production
 	if c.IsProduction() {
 		if len(c.Auth.JWTSecret) < 32 {
 			return errors.New("auth.jwt_secret must be ≥32 chars in production")
