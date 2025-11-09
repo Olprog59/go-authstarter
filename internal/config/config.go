@@ -11,13 +11,14 @@ import (
 
 // Config holds all configuration for the application.
 type Config struct {
-	Server      ServerConfig      `mapstructure:"server"`
-	Environment string            `mapstructure:"environment"`
-	Database    DatabaseConfig    `mapstructure:"database"`
-	Auth        AuthConfig        `mapstructure:"auth"`
-	Cors        CorsConfig        `mapstructure:"cors"`
-	RateLimiter RateLimiterConfig `mapstructure:"rate_limiter"`
-	SMTP        SMTPConfig        `mapstructure:"smtp"`
+	Server            ServerConfig      `mapstructure:"server"`
+	Environment       string            `mapstructure:"environment"`
+	Database          DatabaseConfig    `mapstructure:"database"`
+	Auth              AuthConfig        `mapstructure:"auth"`
+	EmailVerification EmailVerification `mapstructure:"email_verification"`
+	Cors              CorsConfig        `mapstructure:"cors"`
+	RateLimiter       RateLimiterConfig `mapstructure:"rate_limiter"`
+	SMTP              SMTPConfig        `mapstructure:"smtp"`
 }
 
 // ServerConfig holds server-specific configuration.
@@ -26,6 +27,11 @@ type ServerConfig struct {
 	ReadTimeout  time.Duration `mapstructure:"read_timeout"`
 	WriteTimeout time.Duration `mapstructure:"write_timeout"`
 	IdleTimeout  time.Duration `mapstructure:"idle_timeout"`
+	BaseURL      string        `mapstructure:"base_url"`
+}
+
+type EmailVerification struct {
+	TokenExpiration time.Duration `mapstructure:"token_expiration"`
 }
 
 // DatabaseConfig holds database-specific configuration.
@@ -105,6 +111,8 @@ func LoadConfig() (*Config, error) {
 	v.SetDefault("auth.cookie_path", "/")
 	v.SetDefault("auth.cookie_secure", false)
 	v.SetDefault("cors.allowed_origins", []string{"http://localhost:5173"})
+
+	v.SetDefault("email_verification.token_expiration", "24h")
 
 	// Rate limiter defaults - Plus permissif en dev
 	v.SetDefault("rate_limiter.rps", 10)

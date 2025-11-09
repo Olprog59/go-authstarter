@@ -7,6 +7,7 @@ server:
   write_timeout: 10s
   # IdleTimeout is the maximum amount of time to wait for the next request when keep-alives are enabled.
   idle_timeout: 120s
+  base_url: "http://localhost:8080"
 
 # Environment (development, staging, production)
 environment: "production"
@@ -30,6 +31,9 @@ auth:
   cookie_path: "/"
   # Cookie secure flag (set to true in production with HTTPS)
   cookie_secure: false
+
+email_verification:
+  token_expiration: 30m
 
 # CORS configuration
 cors:

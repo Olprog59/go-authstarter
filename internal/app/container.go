@@ -71,7 +71,11 @@ func (c *Container) initDatabase() error {
 	}
 	exec("PRAGMA journal_mode=WAL;")
 	exec("PRAGMA synchronous=NORMAL;")
-	exec("PRAGMA foreign_keys=ON;")
+	exec("PRAGMA busy_timeout = 5000;")
+	exec("PRAGMA automatic_index = true;")
+	exec("PRAGMA foreign_keys = ON;")
+	exec("PRAGMA analysis_limit = 1000;")
+	exec("PRAGMA trusted_schema = OFF;")
 	exec("PRAGMA wal_autocheckpoint=1000;")
 	exec("PRAGMA cache_size=10000;") // négatif pour pages, positif pour KB
 

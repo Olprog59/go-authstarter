@@ -16,6 +16,8 @@ func NewMux(h *Handler, conf *config.Config) http.Handler {
 
 	// Vérification email - strict
 	mux.Handle("GET /verify", chain(h.VerifyEmail, mw, mw.RateLimitStrict))
+	// Dans ton mux
+	mux.Handle("POST /api/resend-verification", chain(h.ResendVerification, mw, mw.RateLimitStrict))
 
 	// Refresh token - strict, auth, and CSRF protection
 	mux.Handle("POST /api/refresh", chain(h.RefreshToken, mw, mw.Auth, mw.CSRF, mw.RateLimitStrict))

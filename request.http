@@ -41,7 +41,7 @@ Authorization: Bearer {{loginRequest.response.cookies.access_token.value}}
 
 ### me
 
-GET http://localhost:8080/api/me HTTP/1.1
+GET {{host}}/me HTTP/1.1
 Content-Type: application/json
 Accept: application/json
 Cookie: access_token={{loginRequest.response.cookies.access_token.value}}
@@ -49,3 +49,14 @@ Cookie: refresh_token={{loginRequest.response.cookies.refresh_token.value}}
 Cookie: csrf_token={{loginRequest.response.cookies.csrf_token.value}}
 X-Csrf-Token: {{loginRequest.response.cookies.csrf_token.value}}
 Authorization: Bearer {{loginRequest.response.cookies.access_token.value}}
+
+
+### resend-verification
+
+POST {{host}}/resend-verification HTTP/1.1
+Content-Type: application/json
+Accept: application/json
+
+{
+  "email": "sam@sam.sam"
+}

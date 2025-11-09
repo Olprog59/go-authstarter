@@ -1,10 +1,13 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"embed"
 	"errors"
 	"fmt"
+	"html/template"
 	"log"
 	"log/slog"
 	"net/mail"
@@ -26,24 +29,34 @@ var (
 	ErrInvalidCredentials = errors.New("invalid credentials")
 )
 
+//go:embed templates/*.html
+var templatesFS embed.FS
+
 type UserService struct {
-	repo         ports.UserRepository
-	refreshStore ports.RefreshTokenStore
-	conf         *config.Config
-	emailSvc     *EmailService
-	userLocks    map[int64]*sync.Mutex
-	mapMutex     sync.Mutex
-	db           *sql.DB
+	repo          ports.UserRepository
+	refreshStore  ports.RefreshTokenStore
+	conf          *config.Config
+	emailSvc      *EmailService
+	userLocks     map[int64]*sync.Mutex
+	mapMutex      sync.Mutex
+	db            *sql.DB
+	emailTemplate *template.Template
 }
 
 func NewUserService(repo ports.UserRepository, conf *config.Config, refreshStore ports.RefreshTokenStore, db *sql.DB) *UserService {
+	tmpl, err := template.ParseFS(templatesFS, "templates/verification_email.html")
+	if err != nil {
+		panic(fmt.Sprintf("Failed to parse email template: %v", err))
+	}
+
 	return &UserService{
-		repo:         repo,
-		conf:         conf,
-		refreshStore: refreshStore,
-		emailSvc:     NewEmailService(conf),
-		userLocks:    make(map[int64]*sync.Mutex),
-		db:           db,
+		repo:          repo,
+		conf:          conf,
+		refreshStore:  refreshStore,
+		emailSvc:      NewEmailService(conf),
+		userLocks:     make(map[int64]*sync.Mutex),
+		db:            db,
+		emailTemplate: tmpl,
 	}
 }
 
@@ -113,26 +126,7 @@ func (s *UserService) Register(email, password string) (*domain.User, error) {
 	log.Println(user.VerificationToken)
 
 	// Envoi async de l’email de vérification
-	go func() {
-		link := fmt.Sprintf("%s/verify?token=%s",
-			map[bool]string{true: "http://localhost:8080", false: "https://votre-domaine.com"}[s.conf.Environment == "development"],
-			user.VerificationToken)
-
-		body := fmt.Sprintf(`<p>Veuillez confirmer votre email : <a href="%s">Confirmer</a></p>`, link)
-
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		if err := s.emailSvc.Send(ctx, email, "Vérifiez votre compte", body); err != nil {
-			slog.Error("Échec envoi email vérification", "email", email, "err", err)
-			return
-		}
-
-		// Affichage dev uniquement
-		if s.conf.Environment == "development" {
-			slog.Info("📧 Lien vérification (dev)", "email", email, "link", link)
-		}
-	}()
+	s.sendVerificationEmailAsync(user.Email, user.VerificationToken)
 
 	return user, nil
 }
@@ -266,7 +260,7 @@ func (s *UserService) RefreshToken(refreshToken, ipHash, uaHash string) (*auth.T
 
 func (s *UserService) SendVerificationEmail(user *domain.User) error {
 	token := uuid.New().String()
-	expiresAt := time.Now().Add(24 * time.Hour)
+	expiresAt := time.Now().Add(s.conf.EmailVerification.TokenExpiration)
 
 	err := s.repo.UpdateDBSendEmail(token, expiresAt, user.ID)
 	if err != nil {
@@ -303,4 +297,116 @@ func isStrongPassword(pw string) bool {
 		}
 	}
 	return hasUpper && hasLower && hasDigit && hasSpecial
+}
+
+// ResendVerification renvoie l'email de vérification
+func (s *UserService) ResendVerification(email string) error {
+	// Validation basique
+	if !isValidEmail(email) {
+		return errors.New("invalid email format")
+	}
+
+	// Récupérer l'utilisateur
+	user, err := s.repo.GetByEmail(email)
+	if err != nil {
+		// ⚠️ Timing-safe : Ne pas révéler si l'email existe
+		time.Sleep(200 * time.Millisecond)
+		return nil // Succès apparent
+	}
+
+	// Déjà vérifié ? → Succès silencieux
+	if user.EmailVerified {
+		return nil
+	}
+
+	// Token encore "frais" si < 20% du temps écoulé
+	tokenAge := time.Since(user.VerificationExpiresAt.Add(-s.conf.EmailVerification.TokenExpiration))
+	tokenFreshnessThreshold := s.conf.EmailVerification.TokenExpiration * 20 / 100 // 20%
+
+	if user.VerificationToken != "" &&
+		tokenAge < tokenFreshnessThreshold &&
+		time.Now().Before(user.VerificationExpiresAt) {
+		// Token frais, on le renvoie
+		s.sendVerificationEmailAsync(user.Email, user.VerificationToken)
+		return nil
+	}
+
+	// Régénérer token + mise à jour BDD
+	token := uuid.New().String()
+	expiresAt := time.Now().Add(s.conf.EmailVerification.TokenExpiration) // Dynamique)
+
+	if err := s.repo.UpdateDBSendEmail(token, expiresAt, user.ID); err != nil {
+		slog.Error("Failed to update verification token", "err", err)
+		return nil // Ne pas révéler l'erreur
+	}
+
+	// Envoi async
+	s.sendVerificationEmailAsync(email, token)
+
+	return nil
+}
+
+// sendVerificationEmailAsync envoie l'email en arrière-plan
+func (s *UserService) sendVerificationEmailAsync(email, token string) {
+	go func() {
+		link := fmt.Sprintf("%s/verify?token=%s", s.conf.Server.BaseURL, token)
+
+		// Données pour le template
+		data := struct {
+			Email      string
+			VerifyLink string
+			Duration   string
+		}{
+			Email:      email,
+			VerifyLink: link,
+			Duration:   formatDurationFR(s.conf.EmailVerification.TokenExpiration),
+		}
+
+		// Render template
+		var body bytes.Buffer
+		if err := s.emailTemplate.Execute(&body, data); err != nil {
+			slog.Error("Failed to execute email template", "err", err)
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := s.emailSvc.Send(ctx, email, "Vérifiez votre compte", body.String()); err != nil {
+			slog.Error("Email verification send failed", "email", email, "err", err)
+			return
+		}
+
+		if s.conf.Environment == "development" {
+			slog.Info("📧 Lien vérification (dev)", "email", email, "link", link)
+		}
+	}()
+}
+
+// formatDurationFR formate une durée en français lisible
+func formatDurationFR(d time.Duration) string {
+	hours := int(d.Hours())
+	minutes := int(d.Minutes()) % 60
+
+	if hours > 0 && minutes > 0 {
+		return fmt.Sprintf("%d heure%s et %d minute%s",
+			hours, plural(hours), minutes, plural(minutes))
+	}
+	if hours > 0 {
+		return fmt.Sprintf("%d heure%s", hours, plural(hours))
+	}
+	if minutes > 0 {
+		return fmt.Sprintf("%d minute%s", minutes, plural(minutes))
+	}
+
+	// Moins d'une minute
+	seconds := int(d.Seconds())
+	return fmt.Sprintf("%d seconde%s", seconds, plural(seconds))
+}
+
+func plural(n int) string {
+	if n > 1 {
+		return "s"
+	}
+	return ""
 }

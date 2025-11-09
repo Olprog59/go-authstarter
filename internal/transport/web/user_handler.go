@@ -79,7 +79,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		Value:    csrfToken,
 		Path:     h.container.Config.Auth.CookiePath,
 		MaxAge:   int(h.container.Config.Auth.AccessTokenDuration.Seconds()), // Même durée que l'access token
-		HttpOnly: false, // Doit être accessible par JS
+		HttpOnly: false,                                                      // Doit être accessible par JS
 		Secure:   h.container.Config.Auth.CookieSecure,
 		SameSite: http.SameSiteStrictMode,
 		Domain:   h.container.Config.Auth.CookieDomain,
@@ -103,6 +103,25 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonResponse(w, dto.UserLoginToDTO(user))
+}
+
+func (h *Handler) ResendVerification(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Email string `json:"email"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	// Appel service (toujours succès apparent)
+	_ = h.container.UserSvc.ResendVerification(req.Email)
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{
+		"message": "If the email exists and is not verified, a verification link has been sent",
+	})
 }
 
 func (h *Handler) RefreshToken(w http.ResponseWriter, r *http.Request) {
