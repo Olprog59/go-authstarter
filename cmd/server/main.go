@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/Olprog59/go-fun/internal/app"
 	"github.com/Olprog59/go-fun/internal/config"
+	"github.com/Olprog59/go-fun/internal/infrastructure/logging"
 	"github.com/Olprog59/go-fun/internal/transport/web"
 )
 
@@ -73,7 +75,7 @@ func run() error {
 
 	// Setup HTTP server
 	handler := web.NewHandler(container)
-	mux := web.NewMux(handler, cfg)
+	mux := web.NewMux(handler, cfg, container)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Server.Port,
@@ -151,31 +153,123 @@ func logStartupInfo(conf *config.Config) {
 	)
 }
 
-// setupLogger configures the application's structured logger (`slog`) based on the environment.
+// setupLogger configures the application's structured logger (`slog`) based on the configuration.
 //
-// In a production environment (`conf.IsProduction()` is true):
-// - The logger uses a JSON handler, which outputs logs in a structured JSON format.
-// - The logging level is set to `slog.LevelInfo`, meaning only informational messages and above are logged.
+// The logger can write to two outputs:
+// 1. Console (stdout) - For local debugging and container logs (docker logs)
+// 2. Loki - For centralized log aggregation (via direct HTTP push)
 //
-// In a development environment (otherwise):
-// - The logger uses a Text handler, which outputs human-readable, colored text logs.
-// - The logging level is set to `slog.LevelDebug`, providing more verbose output for debugging purposes.
+// Configuration via config.yaml:
+// - logging.level: debug, info, warn, error (default: info)
+// - logging.format: text or json (default: text)
+// - logging.loki_enabled: true/false (default: false)
+// - logging.loki_url: Loki server URL (default: http://localhost:3100)
+// - logging.loki_batch_size: Number of logs to batch before sending (default: 10)
 //
-// This function ensures that logs are formatted and filtered appropriately for different operational contexts.
+// In development, typically use:
+//   - Console with text format for readability
+//   - Loki enabled for testing the monitoring stack
+//
+// In production, typically use:
+//   - Console with JSON format for container log aggregation
+//   - Loki enabled for centralized logging
+//
+// This function ensures that logs are formatted, filtered, and routed appropriately
+// based on the application's configuration.
 func setupLogger(conf *config.Config) {
-	var handler slog.Handler
+	// Parse log level from config
+	var level slog.Level
+	switch strings.ToLower(conf.Logging.Level) {
+	case "debug":
+		level = slog.LevelDebug
+	case "info":
+		level = slog.LevelInfo
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	default:
+		level = slog.LevelInfo
+	}
 
-	if conf.IsProduction() {
-		// In production: structured JSON, level INFO
-		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-			Level: slog.LevelInfo,
+	// Create console handler
+	var consoleHandler slog.Handler
+	if strings.ToLower(conf.Logging.Format) == "json" {
+		consoleHandler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+			Level:     level,
+			AddSource: conf.IsProduction(),
 		})
 	} else {
-		// In development: colored text, level DEBUG
-		handler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-			Level: slog.LevelDebug,
+		consoleHandler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+			Level: level,
 		})
 	}
 
-	slog.SetDefault(slog.New(handler))
+	// If Loki is enabled, create a multi-handler that sends to both console and Loki
+	if conf.Logging.LokiEnabled {
+		lokiHandler := logging.NewLokiHandler(
+			conf.Logging.LokiURL,
+			conf.Logging.LokiLabels,
+			conf.Logging.LokiBatchSize,
+			true,
+			level,
+		)
+
+		// Use multiHandler to send to both console and Loki
+		handler := &multiHandler{
+			consoleHandler: consoleHandler,
+			lokiHandler:    lokiHandler,
+		}
+		slog.SetDefault(slog.New(handler))
+
+		slog.Info("📊 Logging configured",
+			"level", level.String(),
+			"format", conf.Logging.Format,
+			"loki_enabled", true,
+			"loki_url", conf.Logging.LokiURL,
+		)
+	} else {
+		// Console only
+		slog.SetDefault(slog.New(consoleHandler))
+
+		slog.Info("📊 Logging configured",
+			"level", level.String(),
+			"format", conf.Logging.Format,
+			"loki_enabled", false,
+		)
+	}
+}
+
+// multiHandler writes to both console and Loki.
+type multiHandler struct {
+	consoleHandler slog.Handler
+	lokiHandler    slog.Handler
+}
+
+func (h *multiHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return h.consoleHandler.Enabled(ctx, level) || h.lokiHandler.Enabled(ctx, level)
+}
+
+func (h *multiHandler) Handle(ctx context.Context, record slog.Record) error {
+	// Write to console
+	if err := h.consoleHandler.Handle(ctx, record); err != nil {
+		return err
+	}
+	// Write to Loki (non-blocking, errors are logged internally)
+	_ = h.lokiHandler.Handle(ctx, record)
+	return nil
+}
+
+func (h *multiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &multiHandler{
+		consoleHandler: h.consoleHandler.WithAttrs(attrs),
+		lokiHandler:    h.lokiHandler.WithAttrs(attrs),
+	}
+}
+
+func (h *multiHandler) WithGroup(name string) slog.Handler {
+	return &multiHandler{
+		consoleHandler: h.consoleHandler.WithGroup(name),
+		lokiHandler:    h.lokiHandler.WithGroup(name),
+	}
 }

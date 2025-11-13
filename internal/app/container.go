@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Olprog59/go-fun/internal/config"
+	"github.com/Olprog59/go-fun/internal/metrics"
 	"github.com/Olprog59/go-fun/internal/ports"
 	"github.com/Olprog59/go-fun/internal/repository"
 	"github.com/Olprog59/go-fun/internal/service"
@@ -33,6 +34,7 @@ type Container struct {
 
 	Config            *config.Config            // Application configuration settings.
 	RefreshTokenStore ports.RefreshTokenStore // Store for managing refresh tokens.
+	Metrics           *metrics.Metrics         // Prometheus metrics collectors.
 
 	ctxCancel context.CancelFunc // Function to cancel the background context for graceful shutdown.
 }
@@ -55,6 +57,9 @@ func NewContainer(cfg *config.Config) (*Container, error) {
 	c := &Container{}
 	c.Config = cfg
 
+	// Initialize metrics first (no dependencies)
+	c.Metrics = metrics.NewMetrics()
+
 	if err := c.initDatabase(); err != nil {
 		return nil, fmt.Errorf("database init: %w", err)
 	}
@@ -66,6 +71,9 @@ func NewContainer(cfg *config.Config) (*Container, error) {
 
 	c.initRepositories()
 	c.initServices()
+
+	// Update database connection metrics
+	c.updateDatabaseMetrics()
 
 	return c, nil
 }
@@ -177,13 +185,14 @@ func (c *Container) initRepositories() {
 //   of this background goroutine when the application closes.
 func (c *Container) initServices() {
 	c.RefreshTokenStore = repository.NewSQLiteRefreshTokenStore(c.DB)
-	c.UserSvc = service.NewUserService(c.UserRepo, c.Config, c.RefreshTokenStore, c.DB)
+	c.UserSvc = service.NewUserService(c.UserRepo, c.Config, c.RefreshTokenStore, c.DB, c.Metrics)
 
 	// Daily purge + clean stop
 	ctx, cancel := context.WithCancel(context.Background())
 	c.ctxCancel = cancel // add `ctxCancel context.CancelFunc` in Container struct
 
 	go func() {
+		c.Metrics.SetBackgroundTaskStatus("token_purge", true)
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
 		for {
@@ -193,11 +202,18 @@ func (c *Container) initServices() {
 					log.Printf("purge failed: %v", err)
 				}
 			case <-ctx.Done():
+				c.Metrics.SetBackgroundTaskStatus("token_purge", false)
 				log.Println("purge goroutine stopped")
 				return
 			}
 		}
 	}()
+}
+
+// updateDatabaseMetrics updates Prometheus metrics for database connections.
+func (c *Container) updateDatabaseMetrics() {
+	stats := c.DB.Stats()
+	c.Metrics.UpdateDatabaseConnections(stats.OpenConnections)
 }
 
 // Close performs a graceful shutdown of all resources managed by the Container.

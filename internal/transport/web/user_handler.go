@@ -8,10 +8,11 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/Olprog59/go-fun/internal/dto"
 	"github.com/Olprog59/go-fun/internal/service"
-	"github.com/golang-jwt/jwt/v5"
+	"github.com/Olprog59/go-fun/internal/service/auth"
 )
 
 // sha256hex computes the SHA-256 hash of a string and returns it as a hex-encoded string.
@@ -41,24 +42,35 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ipHash := sha256hex(r.RemoteAddr)
+	// Use getIP() to correctly extract client IP from proxy headers
+	// This ensures consistency with rate limiting and proper IP tracking
+	ipHash := sha256hex(getIP(r))
 	uaHash := sha256hex(r.Header.Get("User-Agent"))
 	user, tokenPair, err := h.container.UserSvc.Login(req.Username, req.Password, ipHash, uaHash)
 	if err != nil {
 		status := http.StatusUnauthorized
-		if !errors.Is(err, service.ErrInvalidCredentials) {
+
+		// Determine login failure reason for metrics
+		errMsg := err.Error()
+		switch {
+		case errors.Is(err, service.ErrInvalidCredentials):
+			h.container.Metrics.RecordLoginAttempt("failure")
+		case strings.Contains(errMsg, "locked"):
+			h.container.Metrics.RecordLoginAttempt("locked")
+		case strings.Contains(errMsg, "not verified"):
+			h.container.Metrics.RecordLoginAttempt("unverified")
+		default:
 			slog.Error("login failed", "err", err, "email", req.Username)
 			err = errors.New("authentication failed")
 			status = http.StatusInternalServerError
 		}
+
 		ErrorResponse(w, err.Error(), status)
 		return
 	}
 
-	if errors.Is(err, errors.New("email not verified")) {
-		ErrorResponse(w, "please verify your email first", http.StatusForbidden)
-		return
-	}
+	// Successful login
+	h.container.Metrics.RecordLoginAttempt("success")
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     "access_token",
@@ -88,11 +100,14 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name:     "csrf_token",
-		Value:    csrfToken,
-		Path:     h.container.Config.Auth.CookiePath,
-		MaxAge:   int(h.container.Config.Auth.AccessTokenDuration.Seconds()),
-		HttpOnly: false,
+		Name:  "csrf_token",
+		Value: csrfToken,
+		Path:  h.container.Config.Auth.CookiePath,
+		// IMPORTANT: CSRF token should have the same lifetime as the refresh token (not access token)
+		// This allows the user to continue using the app even after the access token expires
+		// and is refreshed. If CSRF token expires after 15 minutes, every refresh operation would fail.
+		MaxAge:   int(h.container.Config.Auth.RefreshTokenDuration.Seconds()),
+		HttpOnly: false, // Must be false so JavaScript can read it to send in headers
 		Secure:   h.container.Config.Auth.CookieSecure,
 		SameSite: http.SameSiteStrictMode,
 		Domain:   h.container.Config.Auth.CookieDomain,
@@ -125,6 +140,9 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		ErrorResponse(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// Record successful registration
+	h.container.Metrics.RecordRegistration()
 
 	jsonResponse(w, dto.UserLoginToDTO(user))
 }
@@ -179,14 +197,31 @@ func (h *Handler) RefreshToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ipHash := sha256hex(r.RemoteAddr)
+	// Use getIP() to correctly extract client IP from proxy headers
+	// This ensures consistency with the stored IP hash during login
+	ipHash := sha256hex(getIP(r))
 	uaHash := sha256hex(r.Header.Get("User-Agent"))
 
 	tokenPair, err := h.container.UserSvc.RefreshToken(req.RefreshToken, ipHash, uaHash)
 	if err != nil {
+		// Determine refresh failure reason for metrics
+		errMsg := err.Error()
+		switch {
+		case strings.Contains(errMsg, "binding"):
+			h.container.Metrics.RecordTokenRefresh("binding_failure")
+			h.container.Metrics.RecordTokenBindingFailure()
+		case strings.Contains(errMsg, "expired") || strings.Contains(errMsg, "revoked"):
+			h.container.Metrics.RecordTokenRefresh("expired")
+		default:
+			h.container.Metrics.RecordTokenRefresh("invalid")
+		}
+
 		ErrorResponse(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
+
+	// Successful token refresh
+	h.container.Metrics.RecordTokenRefresh("success")
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     "access_token",
@@ -226,8 +261,7 @@ func (h *Handler) RefreshToken(w http.ResponseWriter, r *http.Request) {
 // If the token is invalid, expired, or the user is not found, it returns an
 // appropriate HTTP error (401 Unauthorized).
 func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
-
-	claims, ok := r.Context().Value(ClaimsContextKey).(*jwt.RegisteredClaims)
+	claims, ok := r.Context().Value(ClaimsContextKey).(*auth.CustomClaims)
 	if !ok {
 		ErrorResponse(w, "Invalid or expired token", http.StatusUnauthorized)
 		return
@@ -252,10 +286,10 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 // when a user clicks the verification link sent to their email.
 //
 // The handler expects a 'token' as a URL query parameter. It performs the following actions:
-// 1. Extracts the verification token from the request URL.
-// 2. Calls the user repository to find a matching, unexpired token.
-// 3. If a valid token is found, it updates the user's record to mark the email as verified
-//    and clears the verification token details to prevent reuse.
+//  1. Extracts the verification token from the request URL.
+//  2. Calls the user repository to find a matching, unexpired token.
+//  3. If a valid token is found, it updates the user's record to mark the email as verified
+//     and clears the verification token details to prevent reuse.
 //
 // If the token is missing, invalid, or expired, it returns a "400 Bad Request" error.
 // On successful verification, it returns a "200 OK" response with a confirmation message.
@@ -268,9 +302,13 @@ func (h *Handler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
 
 	err := h.container.UserRepo.UpdateDBVerify(token)
 	if err != nil {
+		h.container.Metrics.RecordEmailVerification("failure")
 		ErrorResponse(w, "invalid or expired token", http.StatusBadRequest)
 		return
 	}
+
+	// Successful email verification
+	h.container.Metrics.RecordEmailVerification("success")
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"message": "email verified"})

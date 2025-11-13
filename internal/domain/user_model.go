@@ -2,6 +2,29 @@ package domain
 
 import "time"
 
+// UserRole represents a user's role in the system.
+// Roles are used for authorization and access control throughout the application.
+type UserRole string
+
+const (
+	// RoleUser is the default role assigned to newly registered users.
+	// Users with this role have access to standard user features.
+	RoleUser UserRole = "user"
+
+	// RoleModerator is assigned to users who can moderate content and users.
+	// Moderators have elevated permissions to manage community content.
+	RoleModerator UserRole = "moderator"
+
+	// RoleAdmin is the highest privilege level with full system access.
+	// Admins can manage all users, content, and system settings.
+	RoleAdmin UserRole = "admin"
+)
+
+// IsValid checks if the role is one of the defined valid roles.
+func (r UserRole) IsValid() bool {
+	return r == RoleUser || r == RoleModerator || r == RoleAdmin
+}
+
 // User represents the core business entity for a user.
 // This struct is "pure" as it belongs to the domain layer and has no dependencies
 // on external packages like databases or serializers. It defines the essential
@@ -9,13 +32,57 @@ import "time"
 type User struct {
 	BaseModel             // Embeds common fields like CreatedAt, UpdatedAt, DeletedAt.
 	ID                    int64
-	Email                 string    // The user's unique email address.
-	Password              string    // The hashed password.
-	CreatedAt             time.Time // Timestamp of when the user was created.
+	Email                 string     // The user's unique email address.
+	Password              string     // The hashed password.
+	Role                  UserRole   // The user's role for authorization (user, moderator, admin).
+	CreatedAt             time.Time  // Timestamp of when the user was created.
 	Token                 *RefreshToken
-	EmailVerified         bool      // Flag indicating if the user has verified their email address.
-	VerificationToken     string    // The token sent to the user for email verification.
-	VerificationExpiresAt time.Time // The expiration time of the verification token.
+	EmailVerified         bool       // Flag indicating if the user has verified their email address.
+	VerificationToken     string     // The token sent to the user for email verification.
+	VerificationExpiresAt time.Time  // The expiration time of the verification token.
+	FailedLoginAttempts   int        // Counter for consecutive failed login attempts (for brute force protection).
+	LockedUntil           *time.Time // Timestamp until which the account is locked (NULL if not locked).
+}
+
+// IsLocked checks if the user account is currently locked due to too many failed login attempts.
+// An account is considered locked if LockedUntil is set and the current time is before that timestamp.
+// If LockedUntil has passed, the account is no longer locked (even if the field is not cleared yet).
+func (u *User) IsLocked() bool {
+	if u.LockedUntil == nil {
+		return false
+	}
+	return time.Now().Before(*u.LockedUntil)
+}
+
+// HasRole checks if the user has the exact specified role.
+func (u *User) HasRole(role UserRole) bool {
+	return u.Role == role
+}
+
+// IsAdmin checks if the user has admin privileges.
+func (u *User) IsAdmin() bool {
+	return u.Role == RoleAdmin
+}
+
+// IsModerator checks if the user has moderator privileges.
+func (u *User) IsModerator() bool {
+	return u.Role == RoleModerator
+}
+
+// HasMinimumRole checks if the user has at least the specified role level.
+// Role hierarchy: admin > moderator > user
+// For example, an admin HasMinimumRole(RoleUser) returns true.
+func (u *User) HasMinimumRole(role UserRole) bool {
+	roleHierarchy := map[UserRole]int{
+		RoleUser:      1,
+		RoleModerator: 2,
+		RoleAdmin:     3,
+	}
+
+	userLevel := roleHierarchy[u.Role]
+	requiredLevel := roleHierarchy[role]
+
+	return userLevel >= requiredLevel
 }
 
 // RefreshToken represents a stored refresh token.

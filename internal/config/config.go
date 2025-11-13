@@ -24,6 +24,7 @@ type Config struct {
 	Cors              CorsConfig        `mapstructure:"cors"`               // Cross-Origin Resource Sharing policies.
 	RateLimiter       RateLimiterConfig `mapstructure:"rate_limiter"`       // Configuration for API rate limiting.
 	SMTP              SMTPConfig        `mapstructure:"smtp"`               // SMTP server details for sending emails.
+	Logging           LoggingConfig     `mapstructure:"logging"`            // Logging configuration (console, Loki).
 }
 
 // ServerConfig holds server-specific configuration.
@@ -74,6 +75,16 @@ type SMTPConfig struct {
 	Username string `mapstructure:"username"` // The username for SMTP authentication.
 	Password string `mapstructure:"password"` // The password for SMTP authentication.
 	From     string `mapstructure:"from"`     // The "From" email address for outgoing emails.
+}
+
+// LoggingConfig holds logging configuration (console output, Loki integration).
+type LoggingConfig struct {
+	Level         string            `mapstructure:"level"`          // Logging level: debug, info, warn, error
+	Format        string            `mapstructure:"format"`         // Log format: text or json
+	LokiEnabled   bool              `mapstructure:"loki_enabled"`   // Enable sending logs to Loki
+	LokiURL       string            `mapstructure:"loki_url"`       // Loki server URL (e.g., http://localhost:3100)
+	LokiLabels    map[string]string `mapstructure:"loki_labels"`    // Static labels to attach to all logs sent to Loki
+	LokiBatchSize int               `mapstructure:"loki_batch_size"` // Number of logs to batch before sending to Loki (0 = immediate)
 }
 
 // IsProduction returns true if the application's environment is set to "production".
@@ -144,6 +155,17 @@ func LoadConfig() (*Config, error) {
 	v.SetDefault("smtp.username", "")
 	v.SetDefault("smtp.password", "")
 	v.SetDefault("smtp.from", "no-reply@go-fun.dev")
+
+	// Logging defaults
+	v.SetDefault("logging.level", "info")
+	v.SetDefault("logging.format", "text")
+	v.SetDefault("logging.loki_enabled", false)
+	v.SetDefault("logging.loki_url", "http://localhost:3100")
+	v.SetDefault("logging.loki_labels", map[string]string{
+		"app":         "go-authstarter",
+		"environment": "development",
+	})
+	v.SetDefault("logging.loki_batch_size", 10)
 
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {

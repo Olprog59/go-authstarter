@@ -1,6 +1,7 @@
 ### 
 
 @host = http://localhost:8080/api
+@host_not_api = http://localhost:8080
 
 
 ### loginRequest
@@ -60,3 +61,17 @@ Accept: application/json
 {
   "email": "sam@sam.sam"
 }
+
+
+### health
+
+GET {{host_not_api}}/health HTTP/1.1
+Content-Type: application/json
+Accept: application/json
+
+
+### readiness
+
+GET {{host_not_api}}/readiness HTTP/1.1
+Content-Type: application/json
+Accept: application/json

@@ -11,6 +11,13 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// CustomClaims extends jwt.RegisteredClaims to include custom application-specific claims.
+// This allows us to include additional information in the JWT, such as the user's role.
+type CustomClaims struct {
+	jwt.RegisteredClaims        // Embeds standard JWT claims (subject, issuer, expiration, etc.)
+	Role                 string `json:"role"` // The user's role for authorization purposes.
+}
+
 // TokenPair represents a pair of access and refresh tokens issued to a user.
 // Access tokens are short-lived and used for authenticating API requests,
 // while refresh tokens are long-lived and used to obtain new access tokens.
@@ -34,6 +41,7 @@ type RefreshTokenRecord struct {
 //
 // Parameters:
 //   - userID: The ID of the user for whom the tokens are being generated.
+//   - role: The user's role to include in the JWT claims for authorization.
 //   - jwtKey: The secret key used to sign the JWT access token. Must be at least 32 characters long.
 //   - accessTokenDuration: The duration for which the access token will be valid.
 //   - refreshTokenDuration: The duration for which the refresh token will be valid.
@@ -41,19 +49,22 @@ type RefreshTokenRecord struct {
 // Returns:
 //   - A pointer to a `TokenPair` containing the new access token, refresh token, and access token expiration.
 //   - An error if the JWT key is too weak, or if there's an issue generating the tokens.
-func GenerateTokenPair(userID int64, jwtKey string, accessTokenDuration, refreshTokenDuration time.Duration) (*TokenPair, error) {
+func GenerateTokenPair(userID int64, role, jwtKey string, accessTokenDuration, refreshTokenDuration time.Duration) (*TokenPair, error) {
 	if len(jwtKey) < 32 {
 		return nil, errors.New("JWT key too weak")
 	}
 
 	// Generate the access token (short duration)
 	expiresAt := time.Now().Add(accessTokenDuration)
-	accessClaims := &jwt.RegisteredClaims{
-		Subject:   strconv.FormatInt(userID, 10),
-		ExpiresAt: jwt.NewNumericDate(expiresAt),
-		IssuedAt:  jwt.NewNumericDate(time.Now()),
-		NotBefore: jwt.NewNumericDate(time.Now()),
-		Issuer:    "go-fun",
+	accessClaims := &CustomClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   strconv.FormatInt(userID, 10),
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			NotBefore: jwt.NewNumericDate(time.Now()),
+			Issuer:    "go-fun",
+		},
+		Role: role,
 	}
 
 	accessToken := jwt.NewWithClaims(jwt.SigningMethodHS256, accessClaims)
@@ -89,17 +100,17 @@ func generateSecureToken() (string, error) {
 
 // ValidateJWT parses and validates a JWT access token.
 // It verifies the token's signature using the provided `jwtKey` and checks
-// standard claims like issuer and expiration.
+// standard claims like issuer and expiration, and extracts custom claims including the user's role.
 //
 // Parameters:
 //   - tokenStr: The raw JWT string to validate.
 //   - jwtKey: The secret key used to verify the token's signature.
 //
 // Returns:
-//   - A pointer to `jwt.RegisteredClaims` if the token is valid and successfully parsed.
+//   - A pointer to `CustomClaims` if the token is valid and successfully parsed.
 //   - An error if the token is invalid (e.g., bad signature, expired, wrong issuer, unexpected signing method).
-func ValidateJWT(tokenStr, jwtKey string) (*jwt.RegisteredClaims, error) {
-	token, err := jwt.ParseWithClaims(tokenStr, &jwt.RegisteredClaims{}, func(token *jwt.Token) (any, error) {
+func ValidateJWT(tokenStr, jwtKey string) (*CustomClaims, error) {
+	token, err := jwt.ParseWithClaims(tokenStr, &CustomClaims{}, func(token *jwt.Token) (any, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing algorithm: %v", token.Header["alg"])
 		}
@@ -109,7 +120,7 @@ func ValidateJWT(tokenStr, jwtKey string) (*jwt.RegisteredClaims, error) {
 		return nil, err
 	}
 
-	if claims, ok := token.Claims.(*jwt.RegisteredClaims); ok && token.Valid {
+	if claims, ok := token.Claims.(*CustomClaims); ok && token.Valid {
 		if claims.Issuer != "go-fun" {
 			return nil, errors.New("invalid issuer")
 		}
@@ -145,6 +156,7 @@ type RefreshTokenStore interface {
 //
 // Parameters:
 //   - refreshToken: The old refresh token string provided by the client.
+//   - role: The user's role to include in the new JWT claims.
 //   - jwtKey: The secret key for signing new access tokens.
 //   - store: An implementation of the `RefreshTokenStore` interface.
 //   - accessTokenDuration: The desired duration for the new access token.
@@ -153,7 +165,7 @@ type RefreshTokenStore interface {
 // Returns:
 //   - A pointer to the new `TokenPair` on successful refresh.
 //   - An error if the refresh token is invalid, expired, revoked, or if token generation/storage fails.
-func RefreshTokens(refreshToken, jwtKey string, store RefreshTokenStore, accessTokenDuration, refreshTokenDuration time.Duration) (*TokenPair, error) {
+func RefreshTokens(refreshToken, role, jwtKey string, store RefreshTokenStore, accessTokenDuration, refreshTokenDuration time.Duration) (*TokenPair, error) {
 	// Check the refresh token in the database
 	tokenRecord, err := store.GetRefreshToken(refreshToken)
 	if err != nil {
@@ -175,7 +187,7 @@ func RefreshTokens(refreshToken, jwtKey string, store RefreshTokenStore, accessT
 	}
 
 	// Generate a new pair of tokens
-	newTokenPair, err := GenerateTokenPair(tokenRecord.UserID, jwtKey, accessTokenDuration, refreshTokenDuration)
+	newTokenPair, err := GenerateTokenPair(tokenRecord.UserID, role, jwtKey, accessTokenDuration, refreshTokenDuration)
 	if err != nil {
 		return nil, err
 	}

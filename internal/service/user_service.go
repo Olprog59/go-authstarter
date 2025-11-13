@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
-	"log"
 	"log/slog"
 	"net/mail"
 	"strings"
@@ -37,10 +36,23 @@ type UserService struct {
 	refreshStore  ports.RefreshTokenStore
 	conf          *config.Config
 	emailSvc      *EmailService
-	userLocks     map[int64]*sync.Mutex
+	userLocks     map[int64]*lockEntry
 	mapMutex      sync.Mutex
 	db            *sql.DB
 	emailTemplate *template.Template
+	metrics       metricsRecorder // Metrics recorder for observability
+}
+
+// metricsRecorder is an interface for recording authentication metrics.
+// This allows the service to remain decoupled from the specific metrics implementation.
+type metricsRecorder interface {
+	RecordAccountLockout()
+}
+
+// lockEntry tracks a user-specific mutex and its last access time for cleanup
+type lockEntry struct {
+	mu       *sync.Mutex
+	lastUsed time.Time
 }
 
 // NewUserService creates and returns a new UserService instance.
@@ -62,21 +74,27 @@ type UserService struct {
 //
 // Returns:
 //   A pointer to a fully initialized UserService.
-func NewUserService(repo ports.UserRepository, conf *config.Config, refreshStore ports.RefreshTokenStore, db *sql.DB) *UserService {
+func NewUserService(repo ports.UserRepository, conf *config.Config, refreshStore ports.RefreshTokenStore, db *sql.DB, metrics metricsRecorder) *UserService {
 	tmpl, err := template.ParseFS(templatesFS, "templates/verification_email.html")
 	if err != nil {
 		panic(fmt.Sprintf("Failed to parse email template: %v", err))
 	}
 
-	return &UserService{
+	svc := &UserService{
 		repo:          repo,
 		conf:          conf,
 		refreshStore:  refreshStore,
 		emailSvc:      NewEmailService(conf),
-		userLocks:     make(map[int64]*sync.Mutex),
+		userLocks:     make(map[int64]*lockEntry),
 		db:            db,
 		emailTemplate: tmpl,
+		metrics:       metrics,
 	}
+
+	// Start background cleanup goroutine to prevent memory leak
+	go svc.cleanupInactiveLocks()
+
+	return svc
 }
 
 // getUserLock retrieves a mutex for a specific user ID.
@@ -89,16 +107,51 @@ func NewUserService(repo ports.UserRepository, conf *config.Config, refreshStore
 // user ID does not exist, it is created on-the-fly.
 //
 // This lazy-initialization approach is memory-efficient as it only creates mutexes
-// for users who are actively performing sensitive operations.
+// for users who are actively performing sensitive operations. The lastUsed timestamp
+// is updated on each access to enable cleanup of inactive locks.
 func (s *UserService) getUserLock(userID int64) *sync.Mutex {
 	s.mapMutex.Lock()
 	defer s.mapMutex.Unlock()
 
-	if _, ok := s.userLocks[userID]; !ok {
-		s.userLocks[userID] = &sync.Mutex{}
+	entry, ok := s.userLocks[userID]
+	if !ok {
+		entry = &lockEntry{
+			mu:       &sync.Mutex{},
+			lastUsed: time.Now(),
+		}
+		s.userLocks[userID] = entry
+	} else {
+		// Update last used time
+		entry.lastUsed = time.Now()
 	}
 
-	return s.userLocks[userID]
+	return entry.mu
+}
+
+// cleanupInactiveLocks runs as a background goroutine to periodically clean up
+// user locks that haven't been used recently. This prevents memory leaks by
+// removing locks for users who haven't performed any token operations in a while.
+//
+// Locks that haven't been accessed for more than 1 hour are removed.
+// The cleanup runs every 30 minutes.
+func (s *UserService) cleanupInactiveLocks() {
+	ticker := time.NewTicker(30 * time.Minute)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		s.mapMutex.Lock()
+		now := time.Now()
+		inactiveThreshold := 1 * time.Hour
+
+		for userID, entry := range s.userLocks {
+			if now.Sub(entry.lastUsed) > inactiveThreshold {
+				delete(s.userLocks, userID)
+			}
+		}
+		s.mapMutex.Unlock()
+
+		slog.Debug("Cleaned up inactive user locks", "remaining", len(s.userLocks))
+	}
 }
 
 // Auth verifies a user's credentials.
@@ -136,11 +189,19 @@ func (s *UserService) Auth(email, password string) (*domain.User, error) {
 }
 
 // encode generates a bcrypt hash of a password.
-// It uses a default cost of 10, which is a reasonable balance between security and performance.
-// Bcrypt is used because it is a slow, adaptive hashing function, making it resistant
-// to brute-force attacks.
+// It uses a cost of 12, which provides strong security against brute-force attacks.
+// Bcrypt is used because it is a slow, adaptive hashing function designed specifically
+// for password hashing. Cost 12 (2^12 = 4096 iterations) is the recommended minimum
+// for 2024+ according to OWASP guidelines.
+//
+// Cost evolution:
+// - 2011: Cost 10 was standard (2^10 = 1024 iterations)
+// - 2024: Cost 12+ recommended (2^12 = 4096 iterations)
+//
+// Performance: On modern hardware, cost 12 takes ~250-350ms to hash, which is
+// acceptable for login/registration while providing strong protection.
 func (s *UserService) encode(password string) ([]byte, error) {
-	return bcrypt.GenerateFromPassword([]byte(password), 10)
+	return bcrypt.GenerateFromPassword([]byte(password), 12)
 }
 
 // Register creates a new user account, validates the input, and sends a verification email.
@@ -174,6 +235,12 @@ func (s *UserService) Register(email, password string) (*domain.User, error) {
 		return nil, err
 	}
 
+	// Check if this will be the first user (for admin bootstrapping)
+	userCount, err := s.repo.CountUsers()
+	if err != nil {
+		return nil, fmt.Errorf("failed to check user count: %w", err)
+	}
+
 	bpass, err := s.encode(password)
 	if err != nil {
 		return nil, err
@@ -183,12 +250,31 @@ func (s *UserService) Register(email, password string) (*domain.User, error) {
 		return nil, err
 	}
 
+	// First user automatically becomes admin for bootstrapping
+	if userCount == 0 {
+		if err := s.repo.UpdateRole(user.ID, string(domain.RoleAdmin)); err != nil {
+			slog.Error("Failed to promote first user to admin", "error", err, "user_id", user.ID)
+			// Don't fail registration, just log the error
+		} else {
+			// Refresh user data to get the updated role
+			user, err = s.repo.GetByID(user.ID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to refresh user data: %w", err)
+			}
+			slog.Info("🔐 First user created with admin privileges", "email", user.Email)
+		}
+	}
+
 	err = s.SendVerificationEmail(user)
 	if err != nil {
 		return nil, err
 	}
 
-	log.Println(user.VerificationToken)
+	// In development, log the verification link for easy testing
+	// NEVER log tokens in production as it's a security risk
+	if s.conf.IsDevelopment() {
+		slog.Info("📧 Verification token (dev only)", "email", user.Email, "token", user.VerificationToken)
+	}
 
 	s.sendVerificationEmailAsync(user.Email, user.VerificationToken)
 
@@ -198,17 +284,20 @@ func (s *UserService) Register(email, password string) (*domain.User, error) {
 // Login handles the user authentication process and session creation.
 //
 // This function orchestrates the entire login flow:
-// 1.  It first authenticates the user by verifying their email and password. It also ensures
-//     the user's email is already verified.
-// 2.  To prevent race conditions, it acquires a user-specific lock before modifying token data.
-// 3.  It operates within a database transaction to ensure atomicity. If any step fails,
+// 1.  It first retrieves the user and checks if the account is locked (brute force protection).
+// 2.  It verifies the user's email and password. It also ensures the user's email is verified.
+// 3.  If authentication fails, it increments the failed attempt counter and locks the account
+//     after 5 failed attempts (lockout duration: 15 minutes).
+// 4.  On successful authentication, it resets the failed attempt counter.
+// 5.  To prevent race conditions, it acquires a user-specific lock before modifying token data.
+// 6.  It operates within a database transaction to ensure atomicity. If any step fails,
 //     the entire transaction is rolled back.
-// 4.  As a security measure, it revokes all existing refresh tokens for the user, ensuring
+// 7.  As a security measure, it revokes all existing refresh tokens for the user, ensuring
 //     that a new login invalidates all other sessions.
-// 5.  It generates a new pair of tokens (access and refresh).
-// 6.  The new refresh token is saved to the database, associated with a hash of the client's
+// 8.  It generates a new pair of tokens (access and refresh).
+// 9.  The new refresh token is saved to the database, associated with a hash of the client's
 //     IP address and User-Agent to bind the token to a specific client.
-// 7.  If all steps succeed, the transaction is committed.
+// 10. If all steps succeed, the transaction is committed.
 //
 // Parameters:
 //   - email: The user's email address.
@@ -221,18 +310,63 @@ func (s *UserService) Register(email, password string) (*domain.User, error) {
 //   - A pointer to the new `auth.TokenPair`.
 //   - An error if authentication or any step in the process fails.
 func (s *UserService) Login(email, password, ipHash, uaHash string) (*domain.User, *auth.TokenPair, error) {
+	// Security configuration for brute force protection
+	const (
+		maxFailedAttempts = 5
+		lockoutDuration   = 15 * time.Minute
+	)
+
 	user, err := s.repo.GetByEmail(email)
 	if err != nil {
 		return nil, nil, ErrInvalidCredentials
+	}
+
+	// Check if account is currently locked due to too many failed attempts
+	if user.IsLocked() {
+		remainingTime := user.LockedUntil.Sub(time.Now()).Round(time.Second)
+		slog.Warn("Login attempt on locked account",
+			"email", email,
+			"remaining_lockout", remainingTime.String(),
+		)
+		return nil, nil, fmt.Errorf("account is temporarily locked. Try again in %s", formatLockoutDuration(remainingTime))
 	}
 
 	if !user.EmailVerified {
 		return nil, nil, errors.New("email not verified")
 	}
 
+	// Verify password
 	if err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)); err != nil {
+		// Failed authentication: increment counter and potentially lock account
+		_ = s.repo.IncrementFailedAttempts(user.ID)
+
+		// Check if we should lock the account
+		if user.FailedLoginAttempts+1 >= maxFailedAttempts {
+			lockUntil := time.Now().Add(lockoutDuration)
+			_ = s.repo.LockAccount(user.ID, lockUntil)
+
+			// Record lockout metric
+			if s.metrics != nil {
+				s.metrics.RecordAccountLockout()
+			}
+
+			slog.Warn("Account locked due to failed login attempts",
+				"email", email,
+				"attempts", user.FailedLoginAttempts+1,
+				"locked_until", lockUntil,
+			)
+			return nil, nil, fmt.Errorf("too many failed attempts. Account locked for %d minutes", int(lockoutDuration.Minutes()))
+		}
+
+		slog.Warn("Failed login attempt",
+			"email", email,
+			"attempts", user.FailedLoginAttempts+1,
+		)
 		return nil, nil, ErrInvalidCredentials
 	}
+
+	// Successful authentication: reset failed attempts counter
+	_ = s.repo.ResetFailedAttempts(user.ID)
 
 	mu := s.getUserLock(user.ID)
 	mu.Lock()
@@ -259,7 +393,7 @@ func (s *UserService) Login(email, password, ipHash, uaHash string) (*domain.Use
 		return nil, nil, fmt.Errorf("failed to revoke old tokens: %w", err)
 	}
 
-	tokenPair, err := auth.GenerateTokenPair(user.ID, s.conf.Auth.JWTSecret, s.conf.Auth.AccessTokenDuration, s.conf.Auth.RefreshTokenDuration)
+	tokenPair, err := auth.GenerateTokenPair(user.ID, string(user.Role), s.conf.Auth.JWTSecret, s.conf.Auth.AccessTokenDuration, s.conf.Auth.RefreshTokenDuration)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to generate tokens: %w", err)
 	}
@@ -310,10 +444,12 @@ func (s *UserService) ListUsers() ([]*domain.User, error) {
 // The process is as follows:
 // 1.  The provided refresh token is retrieved from the database.
 // 2.  It is validated to ensure it is not revoked or expired.
-// 3.  The old refresh token is immediately revoked to prevent replay attacks. If this step
+// 3.  Client binding is verified: the IP and User-Agent hashes are checked against
+//     the stored values to detect token theft. In production, mismatches are rejected.
+// 4.  The old refresh token is immediately revoked to prevent replay attacks. If this step
 //     fails, the process is aborted.
-// 4.  A new pair of access and refresh tokens is generated.
-// 5.  The new refresh token is saved to the database, associated with the client's
+// 5.  A new pair of access and refresh tokens is generated.
+// 6.  The new refresh token is saved to the database, associated with the client's
 //     IP and User-Agent hashes for improved security.
 //
 // Parameters:
@@ -335,13 +471,43 @@ func (s *UserService) RefreshToken(refreshToken, ipHash, uaHash string) (*auth.T
 		return nil, fmt.Errorf("expired or revoked refresh token")
 	}
 
+	// Client binding verification: check if IP and User-Agent match the stored values
+	// This prevents stolen tokens from being used by attackers from different locations/devices
+	// In production, we enforce strict matching. In development, we log warnings but allow it.
+	if storedToken.IPHash != ipHash || storedToken.UAHash != uaHash {
+		if s.conf.IsProduction() {
+			// In production, reject the token immediately
+			slog.Warn("Token binding mismatch detected (possible token theft)",
+				"stored_ip_hash", storedToken.IPHash[:10]+"...",
+				"request_ip_hash", ipHash[:10]+"...",
+				"stored_ua_hash", storedToken.UAHash[:10]+"...",
+				"request_ua_hash", uaHash[:10]+"...",
+			)
+			// Revoke the token as a security measure
+			_ = s.refreshStore.Revoke(refreshToken)
+			return nil, fmt.Errorf("token binding verification failed")
+		} else {
+			// In development, log a warning but allow the refresh (for easier testing)
+			slog.Warn("Token binding mismatch (dev mode - allowing)",
+				"ip_match", storedToken.IPHash == ipHash,
+				"ua_match", storedToken.UAHash == uaHash,
+			)
+		}
+	}
+
 	userID := storedToken.UserID
+
+	// Fetch user to get their role for the JWT claims
+	user, err := s.repo.GetByID(userID)
+	if err != nil {
+		return nil, fmt.Errorf("user not found")
+	}
 
 	if err = s.refreshStore.Revoke(refreshToken); err != nil {
 		return nil, fmt.Errorf("failed to revoke refresh token")
 	}
 
-	tokenPair, err := auth.GenerateTokenPair(userID, s.conf.Auth.JWTSecret, s.conf.Auth.AccessTokenDuration, s.conf.Auth.RefreshTokenDuration)
+	tokenPair, err := auth.GenerateTokenPair(userID, string(user.Role), s.conf.Auth.JWTSecret, s.conf.Auth.AccessTokenDuration, s.conf.Auth.RefreshTokenDuration)
 	if err != nil {
 		return nil, fmt.Errorf("could not generate token")
 	}
@@ -381,7 +547,9 @@ func (s *UserService) SendVerificationEmail(user *domain.User) error {
 
 	err := s.repo.UpdateDBSendEmail(token, expiresAt, user.ID)
 	if err != nil {
-		return nil
+		// IMPORTANT: Return the error instead of nil
+		// Silently ignoring database errors is a security risk
+		return fmt.Errorf("failed to update verification token in database: %w", err)
 	}
 
 	user.VerificationToken = token
@@ -562,4 +730,68 @@ func plural(n int) string {
 		return "s"
 	}
 	return ""
+}
+
+// formatLockoutDuration formats a lockout duration into a user-friendly string.
+// Examples:
+//   - 14m30s -> "14 minutes"
+//   - 1m15s -> "1 minute"
+//   - 45s -> "45 seconds"
+func formatLockoutDuration(d time.Duration) string {
+	minutes := int(d.Minutes())
+	seconds := int(d.Seconds()) % 60
+
+	if minutes > 0 {
+		if seconds > 30 {
+			minutes++ // Round up if more than 30 seconds
+		}
+		if minutes == 1 {
+			return "1 minute"
+		}
+		return fmt.Sprintf("%d minutes", minutes)
+	}
+
+	if seconds == 1 {
+		return "1 second"
+	}
+	return fmt.Sprintf("%d seconds", seconds)
+}
+
+// DeleteUser permanently removes a user from the system.
+// This is an administrative function that should only be called by authorized administrators.
+//
+// Parameters:
+//   - userID: The ID of the user to delete.
+//
+// Returns:
+//   - An error if the deletion fails.
+func (s *UserService) DeleteUser(userID int64) error {
+	return s.repo.Delete(userID)
+}
+
+// UpdateUserRole changes a user's role in the system.
+// This is an administrative function for managing user permissions.
+//
+// Parameters:
+//   - userID: The ID of the user whose role should be updated.
+//   - newRole: The new role to assign to the user.
+//
+// Returns:
+//   - An error if the role is invalid or the update fails.
+//
+// Note: After changing a user's role, they will need to refresh their access token
+// for the new role to be reflected in their JWT claims.
+func (s *UserService) UpdateUserRole(userID int64, newRole domain.UserRole) error {
+	if !newRole.IsValid() {
+		return fmt.Errorf("invalid role: %s", newRole)
+	}
+
+	// Fetch the user to verify they exist
+	_, err := s.repo.GetByID(userID)
+	if err != nil {
+		return fmt.Errorf("user not found: %w", err)
+	}
+
+	// Update the role in the database
+	return s.repo.UpdateRole(userID, string(newRole))
 }

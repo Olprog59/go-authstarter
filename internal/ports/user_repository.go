@@ -33,4 +33,19 @@ type UserRepository interface {
 	// Delete removes a user record from the persistence layer by their unique identifier.
 	// It returns an error if the deletion fails.
 	Delete(id int64) error
+	// IncrementFailedAttempts increments the failed login attempts counter for a user.
+	// This is used for brute force protection by tracking failed login attempts.
+	IncrementFailedAttempts(userID int64) error
+	// ResetFailedAttempts resets the failed login attempts counter to zero for a user.
+	// This is typically called after a successful login.
+	ResetFailedAttempts(userID int64) error
+	// LockAccount locks a user account until a specific timestamp.
+	// This prevents the user from logging in until the lock expires.
+	LockAccount(userID int64, until time.Time) error
+	// UpdateRole changes the role of a user in the system.
+	// This is an administrative function used for managing user permissions.
+	UpdateRole(userID int64, role string) error
+	// CountUsers returns the total number of users in the system.
+	// This is used for admin bootstrapping (first user = admin).
+	CountUsers() (int, error)
 }

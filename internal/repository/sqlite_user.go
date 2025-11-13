@@ -59,14 +59,18 @@ func (r *sqliteUserRepo) Create(email, password string) (*domain.User, error) {
 //   - A pointer to the `domain.User` object if found.
 //   - An error, typically `ErrNoRecord` if no user with the given ID exists, or a database error.
 func (r *sqliteUserRepo) GetByID(id int64) (*domain.User, error) {
-	query := `SELECT id, email, password, email_verified, created_at FROM users WHERE id = ?`
+	query := `SELECT id, email, password, role, email_verified, created_at, failed_login_attempts, locked_until
+	          FROM users WHERE id = ?`
 	user := &domain.User{}
 	err := r.db.QueryRow(query, id).Scan(
 		&user.ID,
 		&user.Email,
 		&user.Password,
+		&user.Role,
 		&user.EmailVerified,
 		&user.CreatedAt,
+		&user.FailedLoginAttempts,
+		&user.LockedUntil,
 	)
 	if err != nil {
 		return nil, wrapDBError(err)
@@ -83,14 +87,18 @@ func (r *sqliteUserRepo) GetByID(id int64) (*domain.User, error) {
 //   - A pointer to the `domain.User` object if found.
 //   - An error, typically `ErrNoRecord` if no user with the given email exists, or a database error.
 func (r *sqliteUserRepo) GetByEmail(email string) (*domain.User, error) {
-	query := `SELECT id, email, password, email_verified, created_at FROM users WHERE email = ?`
+	query := `SELECT id, email, password, role, email_verified, created_at, failed_login_attempts, locked_until
+	          FROM users WHERE email = ?`
 	user := &domain.User{}
 	err := r.db.QueryRow(query, email).Scan(
 		&user.ID,
 		&user.Email,
 		&user.Password,
+		&user.Role,
 		&user.EmailVerified,
 		&user.CreatedAt,
+		&user.FailedLoginAttempts,
+		&user.LockedUntil,
 	)
 	if err != nil {
 		return nil, wrapDBError(err)
@@ -104,7 +112,7 @@ func (r *sqliteUserRepo) GetByEmail(email string) (*domain.User, error) {
 //   - A slice of pointers to `domain.User` objects.
 //   - An error if the database query or scanning of rows fails.
 func (r *sqliteUserRepo) List() ([]*domain.User, error) {
-	query := `SELECT id, email, password, created_at FROM users ORDER BY created_at DESC`
+	query := `SELECT id, email, password, role, created_at FROM users ORDER BY created_at DESC`
 	rows, err := r.db.Query(query)
 	if err != nil {
 		return nil, wrapDBError(err)
@@ -114,7 +122,7 @@ func (r *sqliteUserRepo) List() ([]*domain.User, error) {
 	var users []*domain.User
 	for rows.Next() {
 		user := &domain.User{}
-		if err := rows.Scan(&user.ID, &user.Email, &user.Password, &user.CreatedAt); err != nil {
+		if err := rows.Scan(&user.ID, &user.Email, &user.Password, &user.Role, &user.CreatedAt); err != nil {
 			return nil, wrapDBError(err)
 		}
 		users = append(users, user)
@@ -180,4 +188,82 @@ func (r *sqliteUserRepo) UpdateDBVerify(token string) error {
 		return err
 	}
 	return nil
+}
+
+// IncrementFailedAttempts increments the failed login attempts counter for a user.
+// This is called after each failed login attempt to track potential brute force attacks.
+//
+// Parameters:
+//   - userID: The ID of the user whose failed attempt count should be incremented.
+//
+// Returns:
+//   - An error if the database update operation fails.
+func (r *sqliteUserRepo) IncrementFailedAttempts(userID int64) error {
+	query := `UPDATE users SET failed_login_attempts = failed_login_attempts + 1 WHERE id = ?`
+	_, err := r.db.Exec(query, userID)
+	return wrapDBError(err)
+}
+
+// ResetFailedAttempts resets the failed login attempts counter to zero for a user.
+// This is typically called after a successful login or when unlocking an account.
+//
+// Parameters:
+//   - userID: The ID of the user whose failed attempt count should be reset.
+//
+// Returns:
+//   - An error if the database update operation fails.
+func (r *sqliteUserRepo) ResetFailedAttempts(userID int64) error {
+	query := `UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?`
+	_, err := r.db.Exec(query, userID)
+	return wrapDBError(err)
+}
+
+// LockAccount locks a user account until a specific timestamp.
+// This prevents the user from logging in until the lock expires.
+//
+// Parameters:
+//   - userID: The ID of the user whose account should be locked.
+//   - until: The timestamp until which the account should remain locked.
+//
+// Returns:
+//   - An error if the database update operation fails.
+func (r *sqliteUserRepo) LockAccount(userID int64, until time.Time) error {
+	query := `UPDATE users SET locked_until = ? WHERE id = ?`
+	_, err := r.db.Exec(query, until, userID)
+	return wrapDBError(err)
+}
+
+// UpdateRole changes the role of a user in the database.
+// This is an administrative function used for managing user permissions.
+//
+// Parameters:
+//   - userID: The ID of the user whose role should be updated.
+//   - role: The new role to assign (must be one of: "user", "moderator", "admin").
+//
+// Returns:
+//   - An error if the database update operation fails or if the role is invalid.
+//
+// Note: The role validation is enforced by database triggers, which will raise
+// an error if an invalid role is provided.
+func (r *sqliteUserRepo) UpdateRole(userID int64, role string) error {
+	query := `UPDATE users SET role = ? WHERE id = ?`
+	_, err := r.db.Exec(query, role, userID)
+	return wrapDBError(err)
+}
+
+// CountUsers returns the total number of users in the system.
+// This is primarily used for admin bootstrapping: the first user to register
+// is automatically granted admin privileges.
+//
+// Returns:
+//   - The total count of users in the database.
+//   - An error if the database query fails.
+func (r *sqliteUserRepo) CountUsers() (int, error) {
+	query := `SELECT COUNT(*) FROM users`
+	var count int
+	err := r.db.QueryRow(query).Scan(&count)
+	if err != nil {
+		return 0, wrapDBError(err)
+	}
+	return count, nil
 }

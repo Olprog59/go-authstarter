@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -89,25 +90,41 @@ func (rl *RateLimiter) cleanupVisitors() {
 // getIP extracts the real client IP address from the request.
 // It checks common headers used by reverse proxies (`X-Forwarded-For`, `X-Real-IP`)
 // before falling back to the `RemoteAddr` field of the request.
+//
+// IMPORTANT: X-Forwarded-For format is: "client, proxy1, proxy2"
+// We take the FIRST IP (client) as it's the original requester.
+// In production behind a trusted proxy (nginx, cloudflare), this should be the real client IP.
+//
+// Security note: If not behind a trusted proxy, X-Forwarded-For can be spoofed.
+// Consider validating against a list of trusted proxy IPs in production.
 func getIP(r *http.Request) string {
-	// Check for the X-Forwarded-For header, which can contain a comma-separated list of IPs.
+	// Check for the X-Forwarded-For header, which contains a comma-separated list of IPs.
 	forwarded := r.Header.Get("X-Forwarded-For")
 	if forwarded != "" {
-		// The client's IP is typically the first one in the list.
-		if ip, _, err := net.SplitHostPort(forwarded); err == nil {
-			return ip
+		// Split by comma to get individual IPs
+		ips := strings.Split(forwarded, ",")
+		if len(ips) > 0 {
+			// Take the first IP (the original client) and trim whitespace
+			clientIP := strings.TrimSpace(ips[0])
+			// Validate it's a proper IP address
+			if net.ParseIP(clientIP) != nil {
+				return clientIP
+			}
 		}
-		return forwarded
 	}
 
-	// Check for the X-Real-IP header.
-	if ip := r.Header.Get("X-Real-IP"); ip != "" {
-		return ip
+	// Check for the X-Real-IP header (used by some proxies like nginx)
+	if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
+		realIP = strings.TrimSpace(realIP)
+		if net.ParseIP(realIP) != nil {
+			return realIP
+		}
 	}
 
-	// Fallback to the RemoteAddr field.
+	// Fallback to the RemoteAddr field (format is "IP:port")
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
+		// If SplitHostPort fails, it might be just an IP without port
 		return r.RemoteAddr
 	}
 	return ip
@@ -136,6 +153,7 @@ func (mw *Middleware) RateLimit(next http.Handler) http.Handler {
 
 		// Check if the request is allowed by the global rate limiter.
 		if !mw.globalLimiter.getVisitor(ipHash).Allow() {
+			mw.metrics.RecordRateLimitHit("global")
 			sendRateLimitErrorAdvanced(w, "Too many requests. Please try again later.", 60)
 			return
 		}
@@ -159,6 +177,7 @@ func (mw *Middleware) RateLimitStrict(next http.Handler) http.Handler {
 
 		// Check if the request is allowed by the strict rate limiter.
 		if !mw.strictLimiter.getVisitor(ipHash).Allow() {
+			mw.metrics.RecordRateLimitHit("strict")
 			sendRateLimitErrorAdvanced(w, "Too many requests. Please try again later.", 60)
 			return
 		}
@@ -185,6 +204,7 @@ func (mw *Middleware) RateLimitByUser(next http.Handler) http.Handler {
 			ipHash := hashIP(ip)
 
 			if !mw.userLimiter.getVisitor(ipHash).Allow() {
+				mw.metrics.RecordRateLimitHit("user_ip")
 				sendRateLimitErrorAdvanced(w, "Too many requests. Please try again later.", 60)
 				return
 			}
@@ -192,6 +212,7 @@ func (mw *Middleware) RateLimitByUser(next http.Handler) http.Handler {
 			// If the user is authenticated, use their user ID as the key.
 			userKey := fmt.Sprintf("user_%d", userID)
 			if !mw.userLimiter.getVisitor(userKey).Allow() {
+				mw.metrics.RecordRateLimitHit("user_authenticated")
 				sendRateLimitErrorAdvanced(w, "Too many requests. Please try again later.", 60)
 				return
 			}
@@ -204,11 +225,11 @@ func (mw *Middleware) RateLimitByUser(next http.Handler) http.Handler {
 // RateLimitErrorResponse defines a structured response for rate limiting errors.
 // It provides more context to the client than a simple error message.
 type RateLimitErrorResponse struct {
-	Error      string    `json:"error"`                 // A machine-readable error code.
-	Message    string    `json:"message"`               // A human-readable error message.
-	Code       int       `json:"code"`                  // The HTTP status code.
+	Error      string    `json:"error"`               // A machine-readable error code.
+	Message    string    `json:"message"`             // A human-readable error message.
+	Code       int       `json:"code"`                // The HTTP status code.
 	RetryAfter int       `json:"retry_after_seconds"` // Suggested time to wait before retrying, in seconds.
-	Timestamp  time.Time `json:"timestamp"`             // The timestamp of when the error occurred.
+	Timestamp  time.Time `json:"timestamp"`           // The timestamp of when the error occurred.
 }
 
 // sendRateLimitErrorAdvanced sends a detailed JSON response when a rate limit is exceeded.
@@ -245,4 +266,23 @@ func addRateLimitHeaders(w http.ResponseWriter, limit, remaining, resetTime int)
 	w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", limit))
 	w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
 	w.Header().Set("X-RateLimit-Reset", fmt.Sprintf("%d", resetTime))
+}
+
+func (mw *Middleware) RateLimitResend(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !mw.conf.RateLimiter.Enabled {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		ip := getIP(r)
+		ipHash := hashIP(ip)
+
+		if !mw.resendLimiter.getVisitor(ipHash).Allow() {
+			sendRateLimitErrorAdvanced(w, "You can only resend verification emails 3 times per 10 seconds. Please wait.", 10)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }

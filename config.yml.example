@@ -58,3 +58,20 @@ smtp:
   username: ""
   password: ""
   from: "no-reply@go-fun.dev"
+
+# Logging configuration
+logging:
+  # Logging level (debug, info, warn, error)
+  level: "info"
+  # Log format (text for human-readable, json for structured logs)
+  format: "text"
+  # Enable sending logs to Loki
+  loki_enabled: true
+  # Loki server URL
+  loki_url: "http://localhost:3100"
+  # Static labels to attach to all logs sent to Loki
+  loki_labels:
+    app: "go-authstarter"
+    environment: "production"
+  # Number of logs to batch before sending to Loki (0 = immediate, 10-100 recommended)
+  loki_batch_size: 10
