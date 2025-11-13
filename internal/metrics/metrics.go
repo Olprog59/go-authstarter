@@ -28,6 +28,7 @@ type Metrics struct {
 	CSRFFailures       prometheus.Counter     // CSRF validation failures
 	InvalidTokens      prometheus.Counter     // Invalid/expired JWT token attempts
 	TokenBindingFails  prometheus.Counter     // Token binding verification failures (IP/UA mismatch)
+	PermissionDenials  *prometheus.CounterVec // Permission check failures by permission type
 
 	// System metrics
 	DatabaseConnections prometheus.Gauge     // Current database connection pool size
@@ -136,6 +137,14 @@ func NewMetrics() *Metrics {
 				Name: "security_token_binding_failures_total",
 				Help: "Total number of token binding verification failures (IP/UA mismatch)",
 			},
+		),
+
+		PermissionDenials: promauto.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "security_permission_denials_total",
+				Help: "Total number of permission check failures by permission type",
+			},
+			[]string{"permission"},
 		),
 
 		// System metrics
@@ -277,4 +286,12 @@ func statusCodeToString(code int) string {
 		}
 		return "unknown"
 	}
+}
+
+// RecordPermissionDenial increments the permission denial counter for a specific permission.
+// This tracks granular permission-based access control failures.
+//
+// Example: RecordPermissionDenial("users:read")
+func (m *Metrics) RecordPermissionDenial(permission string) {
+	m.PermissionDenials.WithLabelValues(permission).Inc()
 }

@@ -5,6 +5,7 @@ import (
 
 	"github.com/Olprog59/go-fun/internal/app"
 	"github.com/Olprog59/go-fun/internal/config"
+	"github.com/Olprog59/go-fun/internal/domain"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -26,7 +27,7 @@ import (
 // The `chain` helper function is used to apply middleware in a readable, declarative way.
 func NewMux(h *Handler, conf *config.Config, container *app.Container) http.Handler {
 	mux := http.NewServeMux()
-	mw := NewMiddleware(conf, container.Metrics)
+	mw := NewMiddleware(conf, container.Metrics, container.UserRepo)
 
 	// Health check endpoints (no auth, no rate limiting for load balancers)
 	// These endpoints are typically called frequently by monitoring systems
@@ -49,14 +50,15 @@ func NewMux(h *Handler, conf *config.Config, container *app.Container) http.Hand
 	mux.Handle("GET /api/me", chain(h.Me, mw, mw.Auth, mw.CSRF, mw.RateLimitByUser))
 	mux.Handle("GET /{$}", chain(h.Home, mw, mw.Auth, mw.RateLimitByUser))
 
-	// Admin-only endpoints
-	// These endpoints require authentication + CSRF + admin role
-	mux.Handle("GET /api/admin/users", chain(h.ListUsers, mw, mw.Auth, mw.CSRF, mw.RequireRole("admin")))
-	mux.Handle("DELETE /api/admin/users/{id}", chain(h.DeleteUser, mw, mw.Auth, mw.CSRF, mw.RequireRole("admin")))
-	mux.Handle("PATCH /api/admin/users/{id}/role", chain(h.UpdateUserRole, mw, mw.Auth, mw.CSRF, mw.RequireRole("admin")))
+	// Admin endpoints - using granular permissions
+	// These endpoints require authentication + CSRF + specific permission
+	mux.Handle("GET /api/admin/users", chain(h.ListUsers, mw, mw.Auth, mw.CSRF, mw.RequirePermission(domain.PermissionUsersList.String())))
+	mux.Handle("DELETE /api/admin/users/{id}", chain(h.DeleteUser, mw, mw.Auth, mw.CSRF, mw.RequirePermission(domain.PermissionUsersDelete.String())))
+	mux.Handle("PATCH /api/admin/users/{id}/role", chain(h.UpdateUserRole, mw, mw.Auth, mw.CSRF, mw.RequirePermission(domain.PermissionRolesWrite.String())))
 
-	// Moderator endpoints (also accessible by admins due to role hierarchy)
-	mux.Handle("GET /api/moderator/stats", chain(h.GetUserStats, mw, mw.Auth, mw.CSRF, mw.RequireRole("moderator")))
+	// Moderator endpoints - using granular permissions
+	// Moderators and admins can access these (based on their permissions)
+	mux.Handle("GET /api/moderator/stats", chain(h.GetUserStats, mw, mw.Auth, mw.CSRF, mw.RequirePermission(domain.PermissionStatsRead.String())))
 
 	// Global middlewares
 	var handler http.Handler = mux

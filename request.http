@@ -63,6 +63,34 @@ Accept: application/json
 }
 
 
+### all users
+
+GET {{host}}/admin/users HTTP/1.1
+Content-Type: application/json
+Accept: application/json
+Content-Type: application/json
+Accept: application/json
+Cookie: access_token={{loginRequest.response.cookies.access_token.value}}
+Cookie: refresh_token={{loginRequest.response.cookies.refresh_token.value}}
+Cookie: csrf_token={{loginRequest.response.cookies.csrf_token.value}}
+X-Csrf-Token: {{loginRequest.response.cookies.csrf_token.value}}
+Authorization: Bearer {{loginRequest.response.cookies.access_token.value}}
+
+
+### all users
+
+DELETE {{host}}/admin/users/2 HTTP/1.1
+Content-Type: application/json
+Accept: application/json
+Content-Type: application/json
+Accept: application/json
+Cookie: access_token={{loginRequest.response.cookies.access_token.value}}
+Cookie: refresh_token={{loginRequest.response.cookies.refresh_token.value}}
+Cookie: csrf_token={{loginRequest.response.cookies.csrf_token.value}}
+X-Csrf-Token: {{loginRequest.response.cookies.csrf_token.value}}
+Authorization: Bearer {{loginRequest.response.cookies.access_token.value}}
+
+
 ### health
 
 GET {{host_not_api}}/health HTTP/1.1

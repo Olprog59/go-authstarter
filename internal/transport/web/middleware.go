@@ -4,11 +4,14 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Olprog59/go-fun/internal/config"
+	"github.com/Olprog59/go-fun/internal/domain"
 	"github.com/Olprog59/go-fun/internal/metrics"
+	"github.com/Olprog59/go-fun/internal/ports"
 	"github.com/Olprog59/go-fun/internal/service/auth"
 )
 
@@ -82,7 +85,8 @@ type Middleware struct {
 	strictLimiter *RateLimiter   // Stricter rate limiter for sensitive endpoints (e.g., authentication).
 	userLimiter   *RateLimiter   // Rate limiter applied per authenticated user.
 	resendLimiter *RateLimiter
-	metrics       *metrics.Metrics // Prometheus metrics collectors.
+	metrics       *metrics.Metrics     // Prometheus metrics collectors.
+	userRepo      ports.UserRepository // User repository for permission checks.
 }
 
 // responseWriter wraps http.ResponseWriter to capture the status code.
@@ -106,10 +110,11 @@ func (rw *responseWriter) WriteHeader(code int) {
 //   - `strictLimiter`: For production environments, this limiter applies stricter limits (half of global)
 //     to sensitive authentication endpoints to mitigate brute-force attacks.
 //   - `userLimiter`: A more permissive rate limiter (twice the global limits) applied per authenticated user.
-func NewMiddleware(conf *config.Config, metrics *metrics.Metrics) *Middleware {
+func NewMiddleware(conf *config.Config, metrics *metrics.Metrics, userRepo ports.UserRepository) *Middleware {
 	mw := &Middleware{
-		conf:    conf,
-		metrics: metrics,
+		conf:     conf,
+		metrics:  metrics,
+		userRepo: userRepo,
 	}
 
 	// Initialize rate limiters only if enabled
@@ -182,7 +187,17 @@ func (m *Middleware) Auth(next http.Handler) http.Handler {
 			return
 		}
 
+		// Parse user ID from Subject field
+		userID, err := strconv.ParseInt(claims.Subject, 10, 64)
+		if err != nil {
+			slog.Error("Failed to parse user ID from token", "subject", claims.Subject, "error", err)
+			ErrorResponse(w, "Invalid token", http.StatusUnauthorized)
+			return
+		}
+
+		// Add both claims and userID to context
 		ctx := context.WithValue(r.Context(), ClaimsContextKey, claims)
+		ctx = context.WithValue(ctx, "userID", userID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -349,4 +364,82 @@ func (m *Middleware) CSRF(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// RequirePermission is a middleware that enforces granular permission-based access control.
+// It checks if the authenticated user has the specified permission before allowing access
+// to the protected resource.
+//
+// This middleware must be used AFTER the Auth middleware, as it depends on the user ID
+// being present in the request context.
+//
+// Usage:
+//
+//	mux.Handle("/api/admin/users", chain(h.ListUsers, mw, mw.Auth, mw.RequirePermission(domain.PermissionUsersList)))
+//
+// Parameters:
+//   - permission: The permission required to access the endpoint (e.g., domain.PermissionUsersRead)
+//
+// Returns:
+//   - A middleware function that wraps the next handler with permission checking
+//
+// If the user doesn't have the required permission:
+//   - Status: 403 Forbidden
+//   - Response: {"error": "insufficient permissions"}
+//   - Metrics: Records permission denial
+func (m *Middleware) RequirePermission(permission string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Get user ID from context (set by Auth middleware)
+			userIDVal := r.Context().Value("userID")
+			if userIDVal == nil {
+				slog.Error("RequirePermission: userID not found in context - Auth middleware not applied?")
+				ErrorResponse(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+
+			userID, ok := userIDVal.(int64)
+			if !ok {
+				slog.Error("RequirePermission: userID in context is not int64")
+				ErrorResponse(w, "Internal Server Error", http.StatusInternalServerError)
+				return
+			}
+
+			// Check if user has the required permission
+			hasPermission, err := m.userRepo.UserHasPermission(userID, domain.Permission(permission))
+			if err != nil {
+				slog.Error("RequirePermission: failed to check user permission",
+					"user_id", userID,
+					"permission", permission,
+					"error", err,
+				)
+				ErrorResponse(w, "Internal Server Error", http.StatusInternalServerError)
+				return
+			}
+
+			if !hasPermission {
+				// Record security metric
+				m.metrics.RecordPermissionDenial(permission)
+
+				slog.Warn("Permission denied",
+					"user_id", userID,
+					"permission", permission,
+					"path", r.URL.Path,
+					"method", r.Method,
+				)
+
+				ErrorResponse(w, "Insufficient permissions", http.StatusForbidden)
+				return
+			}
+
+			// User has permission, proceed to next handler
+			slog.Debug("Permission granted",
+				"user_id", userID,
+				"permission", permission,
+				"path", r.URL.Path,
+			)
+
+			next.ServeHTTP(w, r)
+		})
+	}
 }

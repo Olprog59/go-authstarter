@@ -32,9 +32,9 @@ type Container struct {
 	// Services (business logic) encapsulate the application's core use cases.
 	UserSvc *service.UserService // Service for user-related operations (e.g., authentication, registration).
 
-	Config            *config.Config            // Application configuration settings.
+	Config            *config.Config          // Application configuration settings.
 	RefreshTokenStore ports.RefreshTokenStore // Store for managing refresh tokens.
-	Metrics           *metrics.Metrics         // Prometheus metrics collectors.
+	Metrics           *metrics.Metrics        // Prometheus metrics collectors.
 
 	ctxCancel context.CancelFunc // Function to cancel the background context for graceful shutdown.
 }
@@ -85,11 +85,12 @@ func NewContainer(cfg *config.Config) (*Container, error) {
 // 1.  Opens a new SQLite database connection using the DSN from the configuration.
 // 2.  Sets connection pool parameters (MaxOpenConns, MaxIdleConns).
 // 3.  Applies various PRAGMA statements to configure SQLite behavior, such as:
-//     - `journal_mode=WAL`: Improves concurrency and durability.
-//     - `synchronous=NORMAL`: Balances durability and performance.
-//     - `busy_timeout`: Sets a timeout for busy connections.
-//     - `foreign_keys=ON`: Enforces referential integrity.
-//     - `trusted_schema=OFF`: Enhances security by preventing malicious schema changes.
+//   - `journal_mode=WAL`: Improves concurrency and durability.
+//   - `synchronous=NORMAL`: Balances durability and performance.
+//   - `busy_timeout`: Sets a timeout for busy connections.
+//   - `foreign_keys=ON`: Enforces referential integrity.
+//   - `trusted_schema=OFF`: Enhances security by preventing malicious schema changes.
+//
 // 4.  Pings the database to verify the connection is active.
 //
 // Returns:
@@ -134,10 +135,10 @@ func (c *Container) initDatabase() error {
 // Migrations are essential for evolving the database schema in a controlled and versioned manner.
 //
 // This function performs the following steps:
-// 1.  Creates a new SQLite database driver instance from the existing `sql.DB` connection.
-// 2.  Initializes a `migrate` instance, pointing to the migration files located in the
+//  1. Creates a new SQLite database driver instance from the existing `sql.DB` connection.
+//  2. Initializes a `migrate` instance, pointing to the migration files located in the
 //     "file://migrations" directory.
-// 3.  Executes all pending "up" migrations. If there are no changes, it logs a message
+//  3. Executes all pending "up" migrations. If there are no changes, it logs a message
 //     and does not return an error.
 //
 // Returns:
@@ -151,7 +152,7 @@ func (c *Container) runMigrations() error {
 
 	m, err := migrate.NewWithDatabaseInstance(
 		"file://migrations",
-		"sqlite",
+		"sqlite3",
 		driver,
 	)
 	if err != nil {
@@ -179,10 +180,10 @@ func (c *Container) initRepositories() {
 // which often include repository interfaces and configuration settings.
 //
 // It also sets up background tasks:
-// - A goroutine is started to periodically purge expired refresh tokens from the database.
-//   This ensures that the token store remains clean and prevents accumulation of stale data.
-// - A context cancellation function (`ctxCancel`) is stored to allow for graceful shutdown
-//   of this background goroutine when the application closes.
+//   - A goroutine is started to periodically purge expired refresh tokens from the database.
+//     This ensures that the token store remains clean and prevents accumulation of stale data.
+//   - A context cancellation function (`ctxCancel`) is stored to allow for graceful shutdown
+//     of this background goroutine when the application closes.
 func (c *Container) initServices() {
 	c.RefreshTokenStore = repository.NewSQLiteRefreshTokenStore(c.DB)
 	c.UserSvc = service.NewUserService(c.UserRepo, c.Config, c.RefreshTokenStore, c.DB, c.Metrics)

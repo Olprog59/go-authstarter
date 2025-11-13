@@ -48,4 +48,20 @@ type UserRepository interface {
 	// CountUsers returns the total number of users in the system.
 	// This is used for admin bootstrapping (first user = admin).
 	CountUsers() (int, error)
+
+	// GetPermissionsForRole retrieves all permissions assigned to a specific role.
+	// Returns a slice of permission strings (e.g., ["users:read", "users:list"]).
+	GetPermissionsForRole(role string) ([]domain.Permission, error)
+
+	// UserHasPermission checks if a user has a specific permission based on their role.
+	// Returns true if the user's role has the given permission, false otherwise.
+	UserHasPermission(userID int64, permission domain.Permission) (bool, error)
+
+	// AddPermissionToRole assigns a permission to a role.
+	// This is used for dynamic permission management.
+	AddPermissionToRole(role string, permission domain.Permission) error
+
+	// RemovePermissionFromRole removes a permission from a role.
+	// This is used for dynamic permission management.
+	RemovePermissionFromRole(role string, permission domain.Permission) error
 }

@@ -267,3 +267,104 @@ func (r *sqliteUserRepo) CountUsers() (int, error) {
 	}
 	return count, nil
 }
+
+// GetPermissionsForRole retrieves all permissions assigned to a specific role.
+// This queries the role_permissions junction table to get all permissions
+// associated with the given role.
+//
+// Parameters:
+//   - role: The role name (e.g., "user", "moderator", "admin")
+//
+// Returns:
+//   - A slice of Permission objects assigned to the role
+//   - An error if the database query fails
+func (r *sqliteUserRepo) GetPermissionsForRole(role string) ([]domain.Permission, error) {
+	query := `
+		SELECT permission
+		FROM role_permissions
+		WHERE role = ?
+	`
+	rows, err := r.db.Query(query, role)
+	if err != nil {
+		return nil, wrapDBError(err)
+	}
+	defer rows.Close()
+
+	var permissions []domain.Permission
+	for rows.Next() {
+		var perm string
+		if err := rows.Scan(&perm); err != nil {
+			return nil, wrapDBError(err)
+		}
+		permissions = append(permissions, domain.Permission(perm))
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, wrapDBError(err)
+	}
+
+	return permissions, nil
+}
+
+// UserHasPermission checks if a user has a specific permission based on their role.
+// This is the primary method used by authorization middleware to verify permissions.
+//
+// Parameters:
+//   - userID: The ID of the user to check
+//   - permission: The permission to verify (e.g., "users:read")
+//
+// Returns:
+//   - true if the user has the permission, false otherwise
+//   - An error if the database query fails
+func (r *sqliteUserRepo) UserHasPermission(userID int64, permission domain.Permission) (bool, error) {
+	query := `
+		SELECT EXISTS(
+			SELECT 1
+			FROM users u
+			JOIN role_permissions rp ON u.role = rp.role
+			WHERE u.id = ? AND rp.permission = ?
+		)
+	`
+	var exists bool
+	err := r.db.QueryRow(query, userID, permission.String()).Scan(&exists)
+	if err != nil {
+		return false, wrapDBError(err)
+	}
+	return exists, nil
+}
+
+// AddPermissionToRole assigns a permission to a role.
+// This is used for dynamic permission management by administrators.
+//
+// Parameters:
+//   - role: The role name to assign the permission to
+//   - permission: The permission to assign
+//
+// Returns:
+//   - An error if the database operation fails or if the permission is already assigned
+func (r *sqliteUserRepo) AddPermissionToRole(role string, permission domain.Permission) error {
+	query := `
+		INSERT INTO role_permissions (role, permission)
+		VALUES (?, ?)
+	`
+	_, err := r.db.Exec(query, role, permission.String())
+	return wrapDBError(err)
+}
+
+// RemovePermissionFromRole removes a permission from a role.
+// This is used for dynamic permission management by administrators.
+//
+// Parameters:
+//   - role: The role name to remove the permission from
+//   - permission: The permission to remove
+//
+// Returns:
+//   - An error if the database operation fails
+func (r *sqliteUserRepo) RemovePermissionFromRole(role string, permission domain.Permission) error {
+	query := `
+		DELETE FROM role_permissions
+		WHERE role = ? AND permission = ?
+	`
+	_, err := r.db.Exec(query, role, permission.String())
+	return wrapDBError(err)
+}
