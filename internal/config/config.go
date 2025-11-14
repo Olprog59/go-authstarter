@@ -20,6 +20,7 @@ type Config struct {
 	Environment       string            `mapstructure:"environment"`        // The application's running environment (e.g., "development", "production").
 	Database          DatabaseConfig    `mapstructure:"database"`           // Database connection string and related settings.
 	Auth              AuthConfig        `mapstructure:"auth"`               // Authentication parameters, including JWT secrets and cookie settings.
+	Security          SecurityConfig    `mapstructure:"security"`           // Security settings for brute force protection and password hashing.
 	EmailVerification EmailVerification `mapstructure:"email_verification"` // Settings for email verification tokens.
 	Cors              CorsConfig        `mapstructure:"cors"`               // Cross-Origin Resource Sharing policies.
 	RateLimiter       RateLimiterConfig `mapstructure:"rate_limiter"`       // Configuration for API rate limiting.
@@ -43,7 +44,8 @@ type EmailVerification struct {
 
 // DatabaseConfig holds database-specific configuration.
 type DatabaseConfig struct {
-	DSN string `mapstructure:"dsn"` // Data Source Name for connecting to the database (e.g., SQLite file path).
+	DSN            string `mapstructure:"dsn"` // Data Source Name for connecting to the database (e.g., SQLite file path).
+	MigrationsPath string `mapstructure:"migrations_path"`
 }
 
 // AuthConfig holds authentication-specific configuration (JWT, cookies).
@@ -54,6 +56,14 @@ type AuthConfig struct {
 	CookieDomain         string        `mapstructure:"cookie_domain"`          // The domain for which authentication cookies are valid.
 	CookiePath           string        `mapstructure:"cookie_path"`            // The path for which authentication cookies are valid.
 	CookieSecure         bool          `mapstructure:"cookie_secure"`          // Flag to indicate if cookies should only be sent over HTTPS.
+}
+
+// SecurityConfig holds security-related configuration for brute force protection.
+type SecurityConfig struct {
+	MaxFailedAttempts int           `mapstructure:"max_failed_attempts"` // Maximum number of failed login attempts before account lockout.
+	LockoutDuration   time.Duration `mapstructure:"lockout_duration"`    // Duration for which an account is locked after exceeding max failed attempts.
+	BcryptCost        int           `mapstructure:"bcrypt_cost"`         // Bcrypt cost factor for password hashing (10-12 recommended).
+	TrustedProxies    []string      `mapstructure:"trusted_proxies"`     // List of trusted proxy IPs (e.g., load balancers). X-Forwarded-For is only trusted from these IPs.
 }
 
 // CorsConfig holds CORS-specific configuration.
@@ -135,12 +145,17 @@ func LoadConfig() (*Config, error) {
 	v.SetDefault("server.idle_timeout", "120s")
 	v.SetDefault("environment", "development")
 	v.SetDefault("database.dsn", "data.db?_journal_mode=WAL&_busy_timeout=5000")
+	v.SetDefault("database.migrations_path", "migrations")
 	v.SetDefault("auth.jwt_secret", "your-super-secret-key")
 	v.SetDefault("auth.access_token_duration", "15m")
 	v.SetDefault("auth.refresh_token_duration", "720h")
 	v.SetDefault("auth.cookie_domain", "localhost")
 	v.SetDefault("auth.cookie_path", "/")
 	v.SetDefault("auth.cookie_secure", false)
+	v.SetDefault("security.max_failed_attempts", 5)
+	v.SetDefault("security.lockout_duration", "15m")
+	v.SetDefault("security.bcrypt_cost", 12)
+	v.SetDefault("security.trusted_proxies", []string{}) // Empty by default - don't trust proxy headers unless explicitly configured
 	v.SetDefault("cors.allowed_origins", []string{"http://localhost:5173"})
 
 	v.SetDefault("email_verification.token_expiration", "24h")
@@ -229,6 +244,10 @@ func (c *Config) Validate() error {
 	if c.IsProduction() {
 		if len(c.Auth.JWTSecret) < 32 {
 			return errors.New("auth.jwt_secret must be ≥32 chars in production")
+		}
+		// Fail if using default JWT secret in production (security risk)
+		if c.Auth.JWTSecret == "your-super-secret-key" {
+			return errors.New("auth.jwt_secret cannot use default value in production - set JWT_SECRET environment variable")
 		}
 		if !c.Auth.CookieSecure {
 			return errors.New("auth.cookie_secure must be true in production")

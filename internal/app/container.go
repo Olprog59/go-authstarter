@@ -29,8 +29,11 @@ type Container struct {
 	// Ports (interfaces) define the boundaries of the application's core logic.
 	UserRepo ports.UserRepository // Repository for user data persistence.
 
-	// Services (business logic) encapsulate the application's core use cases.
-	UserSvc *service.UserService // Service for user-related operations (e.g., authentication, registration).
+	// Services (business logic) - now refactored into focused, single-responsibility services
+	UserSvc         *service.UserService         // Service for user CRUD operations
+	AuthSvc         *service.AuthService         // Service for authentication (login, token refresh)
+	PasswordSvc     *service.PasswordService     // Service for password operations (reset, change)
+	VerificationSvc *service.VerificationService // Service for email verification
 
 	Config            *config.Config          // Application configuration settings.
 	RefreshTokenStore ports.RefreshTokenStore // Store for managing refresh tokens.
@@ -58,7 +61,7 @@ func NewContainer(cfg *config.Config) (*Container, error) {
 	c.Config = cfg
 
 	// Initialize metrics first (no dependencies)
-	c.Metrics = metrics.NewMetrics()
+	c.Metrics = metrics.NewMetrics(nil)
 
 	if err := c.initDatabase(); err != nil {
 		return nil, fmt.Errorf("database init: %w", err)
@@ -151,7 +154,7 @@ func (c *Container) runMigrations() error {
 	}
 
 	m, err := migrate.NewWithDatabaseInstance(
-		"file://migrations",
+		"file://"+c.Config.Database.MigrationsPath,
 		"sqlite3",
 		driver,
 	)
@@ -176,8 +179,13 @@ func (c *Container) initRepositories() {
 }
 
 // initServices initializes all application services (business logic).
-// This function creates instances of each service, injecting their required dependencies,
-// which often include repository interfaces and configuration settings.
+// This function creates instances of each service, injecting their required dependencies.
+//
+// The services are now refactored following Single Responsibility Principle:
+//   - UserService: User CRUD operations (create, read, update, delete)
+//   - AuthService: Authentication (login, token refresh, credential validation)
+//   - PasswordService: Password management (reset, change)
+//   - VerificationService: Email verification
 //
 // It also sets up background tasks:
 //   - A goroutine is started to periodically purge expired refresh tokens from the database.
@@ -186,7 +194,12 @@ func (c *Container) initRepositories() {
 //     of this background goroutine when the application closes.
 func (c *Container) initServices() {
 	c.RefreshTokenStore = repository.NewSQLiteRefreshTokenStore(c.DB)
-	c.UserSvc = service.NewUserService(c.UserRepo, c.Config, c.RefreshTokenStore, c.DB, c.Metrics)
+
+	// Initialize all services with their dependencies
+	c.UserSvc = service.NewUserService(c.UserRepo, c.RefreshTokenStore, c.Config)
+	c.AuthSvc = service.NewAuthService(c.UserRepo, c.RefreshTokenStore, c.Config, c.DB, c.Metrics)
+	c.PasswordSvc = service.NewPasswordService(c.UserRepo, c.RefreshTokenStore, c.Config)
+	c.VerificationSvc = service.NewVerificationService(c.UserRepo, c.Config)
 
 	// Daily purge + clean stop
 	ctx, cancel := context.WithCancel(context.Background())

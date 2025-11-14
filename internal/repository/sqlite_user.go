@@ -368,3 +368,116 @@ func (r *sqliteUserRepo) RemovePermissionFromRole(role string, permission domain
 	_, err := r.db.Exec(query, role, permission.String())
 	return wrapDBError(err)
 }
+
+// SetPasswordResetToken stores a password reset token and its expiration for a user.
+// This is called when a user requests a password reset via email.
+//
+// Parameters:
+//   - email: The user's email address
+//   - token: The randomly generated password reset token (UUID)
+//   - expiresAt: The expiration timestamp for the token (typically 1 hour from now)
+//
+// Returns:
+//   - An error if the user is not found or the database operation fails
+func (r *sqliteUserRepo) SetPasswordResetToken(email string, token string, expiresAt time.Time) error {
+	query := `
+		UPDATE users
+		SET password_reset_token = ?, password_reset_expires_at = ?
+		WHERE email = ? AND deleted_at IS NULL
+	`
+	result, err := r.db.Exec(query, token, expiresAt, email)
+	if err != nil {
+		return wrapDBError(err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return wrapDBError(err)
+	}
+
+	if rowsAffected == 0 {
+		return ErrNoRecord
+	}
+
+	return nil
+}
+
+// GetByPasswordResetToken retrieves a user by their password reset token.
+// It checks that the token exists and hasn't expired.
+//
+// Parameters:
+//   - token: The password reset token from the URL/email
+//
+// Returns:
+//   - The user if the token is valid and not expired
+//   - ErrNoRecord if the token doesn't exist or has expired
+func (r *sqliteUserRepo) GetByPasswordResetToken(token string) (*domain.User, error) {
+	query := `
+		SELECT id, email, password, email_verified, role,
+			   failed_login_attempts, locked_until,
+			   created_at, updated_at
+		FROM users
+		WHERE password_reset_token = ?
+		  AND password_reset_expires_at > datetime('now')
+		  AND deleted_at IS NULL
+	`
+
+	var user domain.User
+	err := r.db.QueryRow(query, token).Scan(
+		&user.ID,
+		&user.Email,
+		&user.Password,
+		&user.EmailVerified,
+		&user.Role,
+		&user.FailedLoginAttempts,
+		&user.LockedUntil,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+
+	if err != nil {
+		return nil, wrapDBError(err)
+	}
+
+	return &user, nil
+}
+
+// UpdatePassword updates a user's password hash in the database.
+// This is called after successful password reset or password change.
+//
+// Parameters:
+//   - userID: The user's unique identifier
+//   - hashedPassword: The new bcrypt-hashed password
+//
+// Returns:
+//   - An error if the database operation fails
+func (r *sqliteUserRepo) UpdatePassword(userID int64, hashedPassword string) error {
+	query := `
+		UPDATE users
+		SET password = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ? AND deleted_at IS NULL
+	`
+	_, err := r.db.Exec(query, hashedPassword, userID)
+	return wrapDBError(err)
+}
+
+// ClearPasswordResetToken clears the password reset token and expiration for a user.
+// This is called after a successful password reset to invalidate the token
+// and prevent it from being reused.
+//
+// Parameters:
+//   - userID: The user's unique identifier
+//
+// Returns:
+//   - An error if the database operation fails
+func (r *sqliteUserRepo) ClearPasswordResetToken(userID int64) error {
+	query := `
+		UPDATE users
+		SET password_reset_token = NULL,
+		    password_reset_expires_at = NULL,
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE id = ? AND deleted_at IS NULL
+	`
+	_, err := r.db.Exec(query, userID)
+	return wrapDBError(err)
+}

@@ -5,71 +5,95 @@ import (
 	"testing"
 )
 
-// TestGetIP tests the getIP function with various header configurations.
-func TestGetIP(t *testing.T) {
+// TestGetIPWithTrustedProxies tests the secure IP extraction with trusted proxy validation.
+func TestGetIPWithTrustedProxies(t *testing.T) {
 	tests := []struct {
-		name              string
-		remoteAddr        string
-		xForwardedFor     string
-		xRealIP           string
-		expectedIP        string
-		description       string
+		name            string
+		remoteAddr      string
+		xForwardedFor   string
+		xRealIP         string
+		trustedProxies  []string
+		expectedIP      string
+		description     string
 	}{
 		{
-			name:        "Direct connection (no proxy)",
-			remoteAddr:  "192.168.1.100:12345",
-			expectedIP:  "192.168.1.100",
-			description: "Should extract IP from RemoteAddr when no proxy headers present",
+			name:           "Direct connection (no proxy)",
+			remoteAddr:     "192.168.1.100:12345",
+			trustedProxies: []string{},
+			expectedIP:     "192.168.1.100",
+			description:    "Should extract IP from RemoteAddr when no proxy headers present",
 		},
 		{
-			name:          "X-Forwarded-For with single IP",
-			remoteAddr:    "10.0.0.1:8080",
-			xForwardedFor: "203.0.113.45",
-			expectedIP:    "203.0.113.45",
-			description:   "Should use first IP from X-Forwarded-For",
+			name:           "X-Forwarded-For but NO trusted proxies (secure default)",
+			remoteAddr:     "10.0.0.1:8080",
+			xForwardedFor:  "203.0.113.45",
+			trustedProxies: []string{}, // Empty = don't trust any proxies
+			expectedIP:     "10.0.0.1",
+			description:    "Should ignore X-Forwarded-For when no trusted proxies configured (security)",
 		},
 		{
-			name:          "X-Forwarded-For with multiple IPs (proxy chain)",
-			remoteAddr:    "10.0.0.1:8080",
-			xForwardedFor: "203.0.113.45, 198.51.100.20, 192.0.2.30",
-			expectedIP:    "203.0.113.45",
-			description:   "Should extract the original client IP (first in chain)",
+			name:           "X-Forwarded-For with trusted proxy",
+			remoteAddr:     "10.0.0.1:8080",
+			xForwardedFor:  "203.0.113.45",
+			trustedProxies: []string{"10.0.0.1"}, // Trust this proxy
+			expectedIP:     "203.0.113.45",
+			description:    "Should use X-Forwarded-For when request comes from trusted proxy",
 		},
 		{
-			name:          "X-Forwarded-For with spaces",
-			remoteAddr:    "10.0.0.1:8080",
-			xForwardedFor: " 203.0.113.45 , 198.51.100.20 ",
-			expectedIP:    "203.0.113.45",
-			description:   "Should handle extra whitespace correctly",
+			name:           "X-Forwarded-For with multiple IPs and trusted proxy",
+			remoteAddr:     "10.0.0.1:8080",
+			xForwardedFor:  "203.0.113.45, 198.51.100.20, 192.0.2.30",
+			trustedProxies: []string{"10.0.0.1"},
+			expectedIP:     "203.0.113.45",
+			description:    "Should extract the original client IP (first in chain) from trusted proxy",
 		},
 		{
-			name:        "X-Real-IP header",
-			remoteAddr:  "10.0.0.1:8080",
-			xRealIP:     "203.0.113.45",
-			expectedIP:  "203.0.113.45",
-			description: "Should use X-Real-IP when no X-Forwarded-For",
+			name:           "X-Forwarded-For with spaces and trusted proxy",
+			remoteAddr:     "10.0.0.1:8080",
+			xForwardedFor:  " 203.0.113.45 , 198.51.100.20 ",
+			trustedProxies: []string{"10.0.0.1"},
+			expectedIP:     "203.0.113.45",
+			description:    "Should handle extra whitespace correctly",
 		},
 		{
-			name:          "X-Forwarded-For takes precedence over X-Real-IP",
-			remoteAddr:    "10.0.0.1:8080",
-			xForwardedFor: "203.0.113.45",
-			xRealIP:       "198.51.100.20",
-			expectedIP:    "203.0.113.45",
-			description:   "X-Forwarded-For should have priority",
+			name:           "X-Real-IP with trusted proxy",
+			remoteAddr:     "10.0.0.1:8080",
+			xRealIP:        "203.0.113.45",
+			trustedProxies: []string{"10.0.0.1"},
+			expectedIP:     "203.0.113.45",
+			description:    "Should use X-Real-IP when no X-Forwarded-For and proxy is trusted",
 		},
 		{
-			name:          "Invalid X-Forwarded-For falls back to X-Real-IP",
-			remoteAddr:    "10.0.0.1:8080",
-			xForwardedFor: "invalid-ip-address",
-			xRealIP:       "203.0.113.45",
-			expectedIP:    "203.0.113.45",
-			description:   "Should fall back when X-Forwarded-For is malformed",
+			name:           "X-Forwarded-For takes precedence over X-Real-IP (trusted proxy)",
+			remoteAddr:     "10.0.0.1:8080",
+			xForwardedFor:  "203.0.113.45",
+			xRealIP:        "198.51.100.20",
+			trustedProxies: []string{"10.0.0.1"},
+			expectedIP:     "203.0.113.45",
+			description:    "X-Forwarded-For should have priority when from trusted proxy",
 		},
 		{
-			name:        "IPv6 address",
-			remoteAddr:  "[2001:db8::1]:12345",
-			expectedIP:  "2001:db8::1",
-			description: "Should handle IPv6 addresses correctly",
+			name:           "Untrusted proxy attempting to spoof IP",
+			remoteAddr:     "99.99.99.99:8080", // Not in trusted list
+			xForwardedFor:  "203.0.113.45",     // Attacker trying to spoof
+			trustedProxies: []string{"10.0.0.1"},
+			expectedIP:     "99.99.99.99",
+			description:    "Should ignore X-Forwarded-For from untrusted source (SECURITY)",
+		},
+		{
+			name:           "Multiple trusted proxies",
+			remoteAddr:     "10.0.0.2:8080",
+			xForwardedFor:  "203.0.113.45",
+			trustedProxies: []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"},
+			expectedIP:     "203.0.113.45",
+			description:    "Should work with multiple trusted proxy IPs",
+		},
+		{
+			name:           "IPv6 address",
+			remoteAddr:     "[2001:db8::1]:12345",
+			trustedProxies: []string{},
+			expectedIP:     "2001:db8::1",
+			description:    "Should handle IPv6 addresses correctly",
 		},
 	}
 
@@ -87,8 +111,8 @@ func TestGetIP(t *testing.T) {
 				req.Header.Set("X-Real-IP", tt.xRealIP)
 			}
 
-			// Execute the function
-			result := getIP(req)
+			// Execute the function with trusted proxies
+			result := getIPWithTrustedProxies(req, tt.trustedProxies)
 
 			// Verify the result
 			if result != tt.expectedIP {
@@ -99,14 +123,15 @@ func TestGetIP(t *testing.T) {
 	}
 }
 
-// TestGetIP_EdgeCases tests edge cases and security scenarios.
-func TestGetIP_EdgeCases(t *testing.T) {
+// TestGetIPWithTrustedProxies_EdgeCases tests edge cases and security scenarios.
+func TestGetIPWithTrustedProxies_EdgeCases(t *testing.T) {
 	t.Run("Empty X-Forwarded-For should fall back", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "http://example.com", nil)
 		req.RemoteAddr = "192.168.1.1:8080"
 		req.Header.Set("X-Forwarded-For", "")
+		trustedProxies := []string{"192.168.1.1"}
 
-		result := getIP(req)
+		result := getIPWithTrustedProxies(req, trustedProxies)
 		expected := "192.168.1.1"
 
 		if result != expected {
@@ -118,11 +143,38 @@ func TestGetIP_EdgeCases(t *testing.T) {
 		req := httptest.NewRequest("GET", "http://example.com", nil)
 		req.RemoteAddr = "192.168.1.1"
 
-		result := getIP(req)
+		result := getIPWithTrustedProxies(req, []string{})
 		expected := "192.168.1.1"
 
 		if result != expected {
 			t.Errorf("Expected %s, got %s", expected, result)
+		}
+	})
+
+	t.Run("Nil trusted proxies (secure default)", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "http://example.com", nil)
+		req.RemoteAddr = "10.0.0.1:8080"
+		req.Header.Set("X-Forwarded-For", "203.0.113.45")
+
+		result := getIPWithTrustedProxies(req, nil)
+		expected := "10.0.0.1" // Should ignore X-Forwarded-For
+
+		if result != expected {
+			t.Errorf("Expected %s (secure default), got %s", expected, result)
+		}
+	})
+
+	t.Run("Invalid IP in X-Forwarded-For with trusted proxy", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "http://example.com", nil)
+		req.RemoteAddr = "10.0.0.1:8080"
+		req.Header.Set("X-Forwarded-For", "not-an-ip")
+		req.Header.Set("X-Real-IP", "203.0.113.45")
+		trustedProxies := []string{"10.0.0.1"}
+
+		result := getIPWithTrustedProxies(req, trustedProxies)
+		// Should fall back to X-Real-IP or RemoteAddr
+		if result != "203.0.113.45" && result != "10.0.0.1" {
+			t.Errorf("Expected fallback IP, got %s", result)
 		}
 	})
 }

@@ -13,11 +13,57 @@ import (
 	"github.com/Olprog59/go-fun/internal/metrics"
 	"github.com/Olprog59/go-fun/internal/ports"
 	"github.com/Olprog59/go-fun/internal/service/auth"
+	"github.com/google/uuid"
 )
 
 const (
-	bearerPrefix = "Bearer " // Standard prefix for Bearer tokens in Authorization headers.
+	bearerPrefix     = "Bearer "   // Standard prefix for Bearer tokens in Authorization headers.
+	RequestIDKey     = "request_id" // Context key for request ID
+	RequestIDHeader  = "X-Request-ID" // HTTP header name for request ID
 )
+
+type contextKey string
+
+const requestIDContextKey contextKey = "request_id"
+
+// RequestID is a middleware that generates a unique ID for each HTTP request.
+// This ID is used for log correlation, tracing, and debugging across distributed systems.
+//
+// The middleware performs the following:
+// 1. Checks if an X-Request-ID header is already present (from proxy/load balancer)
+// 2. If not present, generates a new UUID v4
+// 3. Adds the request ID to the request context for use in handlers and services
+// 4. Includes the request ID in the response headers for client-side correlation
+//
+// This enables tracing a single request through logs, error reports, and monitoring systems.
+func RequestID(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Check if request ID is already provided (from proxy/load balancer)
+		requestID := r.Header.Get(RequestIDHeader)
+		if requestID == "" {
+			// Generate new UUID v4 for this request
+			requestID = uuid.New().String()
+		}
+
+		// Add request ID to context for use in handlers
+		ctx := context.WithValue(r.Context(), requestIDContextKey, requestID)
+		r = r.WithContext(ctx)
+
+		// Add request ID to response headers for client-side correlation
+		w.Header().Set(RequestIDHeader, requestID)
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// GetRequestID extracts the request ID from the context.
+// Returns empty string if no request ID is found.
+func GetRequestID(ctx context.Context) string {
+	if requestID, ok := ctx.Value(requestIDContextKey).(string); ok {
+		return requestID
+	}
+	return ""
+}
 
 // Logging is a middleware that logs details about each incoming HTTP request.
 // It records the request method, path, remote address, and the duration it took
@@ -42,7 +88,10 @@ func Logging(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 
+		// Include request ID in logs for correlation
+		requestID := GetRequestID(r.Context())
 		slog.Info("request",
+			"request_id", requestID,
 			"method", r.Method,
 			"path", r.URL.Path,
 			"remote", r.RemoteAddr,
@@ -119,8 +168,13 @@ func NewMiddleware(conf *config.Config, metrics *metrics.Metrics, userRepo ports
 
 	// Initialize rate limiters only if enabled
 	if conf.RateLimiter.Enabled {
+		// Create a background context for rate limiter cleanup goroutines
+		// This allows for graceful shutdown if needed in the future
+		ctx := context.Background()
+
 		// 1. Global rate limiter (based on config)
 		mw.globalLimiter = NewRateLimiter(
+			ctx,
 			conf.RateLimiter.RPS,
 			conf.RateLimiter.Burst,
 		)
@@ -136,16 +190,16 @@ func NewMiddleware(conf *config.Config, metrics *metrics.Metrics, userRepo ports
 				strictBurst = strictBurst / 2
 			}
 		}
-		mw.strictLimiter = NewRateLimiter(strictRPS, strictBurst)
+		mw.strictLimiter = NewRateLimiter(ctx, strictRPS, strictBurst)
 
 		// 3. Rate limiter per user (2x more permissive)
 		userRPS := conf.RateLimiter.RPS * 2
 		userBurst := conf.RateLimiter.Burst * 2
-		mw.userLimiter = NewRateLimiter(userRPS, userBurst)
+		mw.userLimiter = NewRateLimiter(ctx, userRPS, userBurst)
 
 		// 4. Very strict rate limiter for resend verification (0.3 RPS = ~1 every 3 seconds, burst 3)
 		// This prevents abuse of the email sending endpoint
-		mw.resendLimiter = NewRateLimiter(0.3, 3)
+		mw.resendLimiter = NewRateLimiter(ctx, 0.3, 3)
 	}
 
 	return mw

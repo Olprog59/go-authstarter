@@ -45,6 +45,10 @@ func NewMux(h *Handler, conf *config.Config, container *app.Container) http.Hand
 
 	mux.Handle("POST /api/resend-verification", chain(h.ResendVerification, mw, mw.RateLimitStrict))
 
+	// Password reset endpoints (public, with rate limiting to prevent abuse)
+	mux.Handle("POST /api/request-password-reset", chain(h.RequestPasswordReset, mw, mw.RateLimitStrict))
+	mux.Handle("POST /api/reset-password", chain(h.ResetPassword, mw, mw.RateLimitStrict))
+
 	mux.Handle("POST /api/refresh", chain(h.RefreshToken, mw, mw.Auth, mw.CSRF, mw.RateLimitStrict))
 
 	mux.Handle("GET /api/me", chain(h.Me, mw, mw.Auth, mw.CSRF, mw.RateLimitByUser))
@@ -61,12 +65,14 @@ func NewMux(h *Handler, conf *config.Config, container *app.Container) http.Hand
 	mux.Handle("GET /api/moderator/stats", chain(h.GetUserStats, mw, mw.Auth, mw.CSRF, mw.RequirePermission(domain.PermissionStatsRead.String())))
 
 	// Global middlewares
+	// Applied in reverse order (bottom to top in execution)
 	var handler http.Handler = mux
 	handler = mw.MetricsMiddleware(handler) // Metrics first to capture everything
 	handler = mw.RateLimit(handler)
 	handler = mw.SecurityHeaders(handler)
 	handler = mw.Cors(handler)
-	handler = Logging(handler)
+	handler = Logging(handler)              // Logging second-to-last (includes request ID in logs)
+	handler = RequestID(handler)            // RequestID first - generates ID for all subsequent middleware
 
 	return handler
 }

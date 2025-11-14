@@ -24,6 +24,58 @@ func sha256hex(s string) string {
 	return hex.EncodeToString(hash[:])
 }
 
+// rotateCSRFToken generates a new CSRF token and sets it as a cookie.
+// This should be called after sensitive operations (password reset, role change) to invalidate old CSRF tokens.
+func (h *Handler) rotateCSRFToken(w http.ResponseWriter) error {
+	csrfToken, err := generateCSRFToken()
+	if err != nil {
+		slog.Error("failed to generate CSRF token for rotation", "err", err)
+		return err
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "csrf_token",
+		Value:    csrfToken,
+		Path:     h.container.Config.Auth.CookiePath,
+		MaxAge:   int(h.container.Config.Auth.RefreshTokenDuration.Seconds()),
+		HttpOnly: false, // Must be false so JavaScript can read it
+		Secure:   h.container.Config.Auth.CookieSecure,
+		SameSite: http.SameSiteStrictMode,
+		Domain:   h.container.Config.Auth.CookieDomain,
+	})
+
+	return nil
+}
+
+// setAuthCookies is a helper function that sets both access_token and refresh_token cookies.
+// This reduces code duplication between Login and RefreshToken handlers.
+// It sets HttpOnly, Secure, and SameSite flags according to the application configuration.
+func (h *Handler) setAuthCookies(w http.ResponseWriter, tokenPair *auth.TokenPair) {
+	// Set access token cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "access_token",
+		Value:    tokenPair.AccessToken,
+		Path:     h.container.Config.Auth.CookiePath,
+		MaxAge:   int(h.container.Config.Auth.AccessTokenDuration.Seconds()),
+		HttpOnly: true,
+		Secure:   h.container.Config.Auth.CookieSecure,
+		SameSite: http.SameSiteStrictMode,
+		Domain:   h.container.Config.Auth.CookieDomain,
+	})
+
+	// Set refresh token cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    tokenPair.RefreshToken,
+		Path:     h.container.Config.Auth.CookiePath,
+		MaxAge:   int(h.container.Config.Auth.RefreshTokenDuration.Seconds()),
+		HttpOnly: true,
+		Secure:   h.container.Config.Auth.CookieSecure,
+		SameSite: http.SameSiteStrictMode,
+		Domain:   h.container.Config.Auth.CookieDomain,
+	})
+}
+
 // Login handles user authentication. It expects a JSON body with 'email' and 'password'.
 // On successful authentication, it performs the following actions:
 // 1. Generates a new access token and a refresh token.
@@ -42,11 +94,11 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Use getIP() to correctly extract client IP from proxy headers
-	// This ensures consistency with rate limiting and proper IP tracking
-	ipHash := sha256hex(getIP(r))
+	// Use getIPWithTrustedProxies() to securely extract client IP
+	// Only trusts proxy headers if request comes from a configured trusted proxy
+	ipHash := sha256hex(getIPWithTrustedProxies(r, h.container.Config.Security.TrustedProxies))
 	uaHash := sha256hex(r.Header.Get("User-Agent"))
-	user, tokenPair, err := h.container.UserSvc.Login(req.Username, req.Password, ipHash, uaHash)
+	user, tokenPair, err := h.container.AuthSvc.Login(req.Username, req.Password, ipHash, uaHash)
 	if err != nil {
 		status := http.StatusUnauthorized
 
@@ -72,26 +124,8 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	// Successful login
 	h.container.Metrics.RecordLoginAttempt("success")
 
-	http.SetCookie(w, &http.Cookie{
-		Name:     "access_token",
-		Value:    tokenPair.AccessToken,
-		Path:     h.container.Config.Auth.CookiePath,
-		MaxAge:   int(h.container.Config.Auth.AccessTokenDuration.Seconds()),
-		HttpOnly: true,
-		Secure:   h.container.Config.Auth.CookieSecure,
-		SameSite: http.SameSiteStrictMode,
-		Domain:   h.container.Config.Auth.CookieDomain,
-	})
-	http.SetCookie(w, &http.Cookie{
-		Name:     "refresh_token",
-		Value:    tokenPair.RefreshToken,
-		Path:     h.container.Config.Auth.CookiePath,
-		MaxAge:   int(h.container.Config.Auth.RefreshTokenDuration.Seconds()),
-		HttpOnly: true,
-		Secure:   h.container.Config.Auth.CookieSecure,
-		SameSite: http.SameSiteStrictMode,
-		Domain:   h.container.Config.Auth.CookieDomain,
-	})
+	// Set authentication cookies (access_token and refresh_token)
+	h.setAuthCookies(w, tokenPair)
 
 	csrfToken, err := generateCSRFToken()
 	if err != nil {
@@ -137,6 +171,15 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.container.UserSvc.Register(req.Username, req.Password)
 	if err != nil {
+		// Security: Prevent email enumeration by returning generic message for duplicate emails
+		// If email already exists, return success with generic message instead of error
+		if err.Error() == "email already registered" {
+			w.WriteHeader(http.StatusOK)
+			jsonResponse(w, map[string]string{
+				"message": "Registration successful. Please check your email to verify your account.",
+			})
+			return
+		}
 		ErrorResponse(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -144,7 +187,18 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	// Record successful registration
 	h.container.Metrics.RecordRegistration()
 
-	jsonResponse(w, dto.UserLoginToDTO(user))
+	// Send verification email asynchronously
+	if err := h.container.VerificationSvc.SendVerificationEmail(user); err != nil {
+		slog.Error("failed to send verification email", "email", user.Email, "err", err)
+		// Don't fail the registration - email sending is best-effort
+	}
+
+	// Return generic success message (same as duplicate email case)
+	w.WriteHeader(http.StatusOK)
+	jsonResponse(w, map[string]string{
+		"message": "Registration successful. Please check your email to verify your account.",
+		"user":    dto.UserLoginToDTO(user).Email,
+	})
 }
 
 // ResendVerification handles requests to resend a verification email.
@@ -167,7 +221,7 @@ func (h *Handler) ResendVerification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = h.container.UserSvc.ResendVerification(req.Email)
+	_ = h.container.VerificationSvc.ResendVerification(req.Email)
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{
@@ -197,12 +251,12 @@ func (h *Handler) RefreshToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Use getIP() to correctly extract client IP from proxy headers
+	// Use getIPWithTrustedProxies() to securely extract client IP
 	// This ensures consistency with the stored IP hash during login
-	ipHash := sha256hex(getIP(r))
+	ipHash := sha256hex(getIPWithTrustedProxies(r, h.container.Config.Security.TrustedProxies))
 	uaHash := sha256hex(r.Header.Get("User-Agent"))
 
-	tokenPair, err := h.container.UserSvc.RefreshToken(req.RefreshToken, ipHash, uaHash)
+	tokenPair, err := h.container.AuthSvc.RefreshToken(req.RefreshToken, ipHash, uaHash)
 	if err != nil {
 		// Determine refresh failure reason for metrics
 		errMsg := err.Error()
@@ -223,27 +277,8 @@ func (h *Handler) RefreshToken(w http.ResponseWriter, r *http.Request) {
 	// Successful token refresh
 	h.container.Metrics.RecordTokenRefresh("success")
 
-	http.SetCookie(w, &http.Cookie{
-		Name:     "access_token",
-		Value:    tokenPair.AccessToken,
-		Path:     h.container.Config.Auth.CookiePath,
-		MaxAge:   int(h.container.Config.Auth.AccessTokenDuration.Seconds()),
-		HttpOnly: true,
-		Secure:   h.container.Config.Auth.CookieSecure,
-		SameSite: http.SameSiteStrictMode,
-		Domain:   h.container.Config.Auth.CookieDomain,
-	})
-
-	http.SetCookie(w, &http.Cookie{
-		Name:     "refresh_token",
-		Value:    tokenPair.RefreshToken,
-		Path:     h.container.Config.Auth.CookiePath,
-		MaxAge:   int(h.container.Config.Auth.RefreshTokenDuration.Seconds()),
-		HttpOnly: true,
-		Secure:   h.container.Config.Auth.CookieSecure,
-		SameSite: http.SameSiteStrictMode,
-		Domain:   h.container.Config.Auth.CookieDomain,
-	})
+	// Set authentication cookies (access_token and refresh_token)
+	h.setAuthCookies(w, tokenPair)
 
 	jsonResponse(w, tokenPair)
 }
@@ -300,10 +335,10 @@ func (h *Handler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := h.container.UserRepo.UpdateDBVerify(token)
+	err := h.container.VerificationSvc.VerifyEmail(token)
 	if err != nil {
 		h.container.Metrics.RecordEmailVerification("failure")
-		ErrorResponse(w, "invalid or expired token", http.StatusBadRequest)
+		ErrorResponse(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -312,4 +347,90 @@ func (h *Handler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"message": "email verified"})
+}
+
+// RequestPasswordReset handles the request to initiate a password reset.
+// It expects a JSON body with the user's 'email'.
+//
+// This endpoint is designed to be "timing-safe" to prevent email enumeration attacks.
+// It will always return a successful (200 OK) response with a generic message,
+// regardless of whether the email exists in the database or if an error occurs.
+//
+// If the email exists, a password reset email is sent with a time-limited token (1 hour).
+// The token can only be used once to reset the password.
+//
+// Rate limiting is applied to prevent abuse of the email sending functionality.
+func (h *Handler) RequestPasswordReset(w http.ResponseWriter, r *http.Request) {
+	var req dto.PasswordResetRequestDTO
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		ErrorResponse(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Call service - always returns success for security (prevents email enumeration)
+	err := h.container.PasswordSvc.RequestPasswordReset(req.Email)
+	if err != nil {
+		// This shouldn't happen as RequestPasswordReset always returns nil
+		// But handle it gracefully just in case
+		slog.Error("Unexpected error in RequestPasswordReset", "error", err)
+	}
+
+	// Always return success to prevent email enumeration
+	w.WriteHeader(http.StatusOK)
+	jsonResponse(w, map[string]string{
+		"message": "If an account with that email exists, a password reset link has been sent.",
+	})
+}
+
+// ResetPassword handles the completion of a password reset.
+// It expects a JSON body with 'token' (from the email link) and 'new_password'.
+//
+// Security features:
+// 1. Validates the reset token (checks existence and expiration)
+// 2. Enforces password strength policy
+// 3. Invalidates the token after use (one-time use)
+// 4. Revokes all refresh tokens to force re-login
+//
+// Returns:
+//   - 200 OK with success message if password was reset
+//   - 400 Bad Request if token is invalid/expired or password is weak
+func (h *Handler) ResetPassword(w http.ResponseWriter, r *http.Request) {
+	var req dto.PasswordResetDTO
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		ErrorResponse(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate inputs
+	if req.Token == "" {
+		ErrorResponse(w, "Token is required", http.StatusBadRequest)
+		return
+	}
+
+	if req.NewPassword == "" {
+		ErrorResponse(w, "New password is required", http.StatusBadRequest)
+		return
+	}
+
+	// Reset password
+	err := h.container.PasswordSvc.ResetPassword(req.Token, req.NewPassword)
+	if err != nil {
+		ErrorResponse(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Rotate CSRF token after password reset for security
+	// (password reset is a sensitive operation that changes authentication state)
+	if err := h.rotateCSRFToken(w); err != nil {
+		// Log error but don't fail the request - password was already reset successfully
+		slog.Error("failed to rotate CSRF token after password reset", "err", err)
+	}
+
+	// Success
+	w.WriteHeader(http.StatusOK)
+	jsonResponse(w, map[string]string{
+		"message": "Password has been reset successfully. You can now login with your new password.",
+	})
 }

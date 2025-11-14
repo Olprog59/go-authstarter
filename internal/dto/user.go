@@ -28,3 +28,16 @@ func UserLoginToDTO(user *domain.User) *UserLoginDTOResponse {
 		Role:  string(user.Role),
 	}
 }
+
+// PasswordResetRequestDTO represents the request to initiate a password reset.
+// The client provides the email address of the account to reset.
+type PasswordResetRequestDTO struct {
+	Email string `json:"email"` // The email address of the account to reset.
+}
+
+// PasswordResetDTO represents the request to complete a password reset.
+// The client provides the reset token (from the email link) and the new password.
+type PasswordResetDTO struct {
+	Token       string `json:"token"`        // The password reset token from the email.
+	NewPassword string `json:"new_password"` // The new password to set.
+}

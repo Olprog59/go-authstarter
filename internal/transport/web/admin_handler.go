@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -117,6 +118,13 @@ func (h *Handler) UpdateUserRole(w http.ResponseWriter, r *http.Request) {
 	if err := h.container.UserSvc.UpdateUserRole(userID, newRole); err != nil {
 		ErrorResponse(w, "Failed to update user role", http.StatusInternalServerError)
 		return
+	}
+
+	// Rotate CSRF token after role change for security
+	// (role changes affect permissions and are sensitive operations)
+	if err := h.rotateCSRFToken(w); err != nil {
+		// Log error but don't fail the request - role was already updated successfully
+		slog.Error("failed to rotate CSRF token after role update", "err", err)
 	}
 
 	w.WriteHeader(http.StatusOK)

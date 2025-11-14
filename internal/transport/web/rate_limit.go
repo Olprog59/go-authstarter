@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -21,6 +22,8 @@ type RateLimiter struct {
 	mu       sync.RWMutex        // Read-write mutex to protect concurrent access to the visitors map.
 	rate     rate.Limit          // The number of requests allowed per second.
 	burst    int                 // The maximum burst of requests allowed.
+	ctx      context.Context     // Context for graceful shutdown of cleanup goroutine.
+	cancel   context.CancelFunc  // Cancel function to stop cleanup goroutine.
 }
 
 // Visitor represents a single visitor (e.g., an IP address or user) and their associated rate limiter.
@@ -34,18 +37,29 @@ type Visitor struct {
 // inactive visitors periodically.
 //
 // Parameters:
+//   - ctx: Context for graceful shutdown of the cleanup goroutine.
 //   - rps: Requests per second allowed for each visitor.
 //   - burst: The maximum burst of requests allowed.
-func NewRateLimiter(rps float64, burst int) *RateLimiter {
+func NewRateLimiter(ctx context.Context, rps float64, burst int) *RateLimiter {
+	cleanupCtx, cancel := context.WithCancel(ctx)
+
 	rl := &RateLimiter{
 		visitors: make(map[string]*Visitor),
 		rate:     rate.Limit(rps),
 		burst:    burst,
+		ctx:      cleanupCtx,
+		cancel:   cancel,
 	}
 
 	go rl.cleanupVisitors()
 
 	return rl
+}
+
+// Stop gracefully stops the rate limiter's cleanup goroutine.
+// Should be called during application shutdown.
+func (rl *RateLimiter) Stop() {
+	rl.cancel()
 }
 
 // getVisitor retrieves or creates a rate limiter for a given identifier (e.g., IP hash).
@@ -73,17 +87,28 @@ func (rl *RateLimiter) getVisitor(ip string) *rate.Limiter {
 // remove inactive visitors from the map. This prevents the map from growing
 // indefinitely and consuming too much memory. A visitor is considered inactive
 // if they haven't been seen for more than 3 minutes.
+//
+// The goroutine respects context cancellation for graceful shutdown.
 func (rl *RateLimiter) cleanupVisitors() {
-	for {
-		time.Sleep(5 * time.Minute)
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
 
-		rl.mu.Lock()
-		for ip, v := range rl.visitors {
-			if time.Since(v.lastSeen) > 3*time.Minute {
-				delete(rl.visitors, ip)
+	for {
+		select {
+		case <-ticker.C:
+			// Perform cleanup
+			rl.mu.Lock()
+			for ip, v := range rl.visitors {
+				if time.Since(v.lastSeen) > 3*time.Minute {
+					delete(rl.visitors, ip)
+				}
 			}
+			rl.mu.Unlock()
+
+		case <-rl.ctx.Done():
+			// Context cancelled - graceful shutdown
+			return
 		}
-		rl.mu.Unlock()
 	}
 }
 
@@ -95,9 +120,44 @@ func (rl *RateLimiter) cleanupVisitors() {
 // We take the FIRST IP (client) as it's the original requester.
 // In production behind a trusted proxy (nginx, cloudflare), this should be the real client IP.
 //
-// Security note: If not behind a trusted proxy, X-Forwarded-For can be spoofed.
-// Consider validating against a list of trusted proxy IPs in production.
+// Security: Only trusts X-Forwarded-For and X-Real-IP headers if the request comes from
+// a trusted proxy IP. If trustedProxies is empty or the request is not from a trusted proxy,
+// only RemoteAddr is used (which cannot be spoofed).
 func getIP(r *http.Request) string {
+	return getIPWithTrustedProxies(r, nil)
+}
+
+// getIPWithTrustedProxies extracts the client IP with trusted proxy validation.
+// If trustedProxies is provided and not empty, it validates that the RemoteAddr
+// is in the trusted list before trusting X-Forwarded-For or X-Real-IP headers.
+func getIPWithTrustedProxies(r *http.Request, trustedProxies []string) string {
+	// Extract the immediate connection IP (RemoteAddr)
+	remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		// If SplitHostPort fails, it might be just an IP without port
+		remoteIP = r.RemoteAddr
+	}
+
+	// If no trusted proxies configured, only use RemoteAddr (secure default)
+	if len(trustedProxies) == 0 {
+		return remoteIP
+	}
+
+	// Check if the request is from a trusted proxy
+	isTrustedProxy := false
+	for _, trustedIP := range trustedProxies {
+		if remoteIP == trustedIP {
+			isTrustedProxy = true
+			break
+		}
+	}
+
+	// If not from a trusted proxy, use RemoteAddr (cannot be spoofed)
+	if !isTrustedProxy {
+		return remoteIP
+	}
+
+	// Request is from a trusted proxy - check proxy headers
 	// Check for the X-Forwarded-For header, which contains a comma-separated list of IPs.
 	forwarded := r.Header.Get("X-Forwarded-For")
 	if forwarded != "" {
@@ -121,13 +181,8 @@ func getIP(r *http.Request) string {
 		}
 	}
 
-	// Fallback to the RemoteAddr field (format is "IP:port")
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		// If SplitHostPort fails, it might be just an IP without port
-		return r.RemoteAddr
-	}
-	return ip
+	// Fallback to RemoteAddr if headers are invalid
+	return remoteIP
 }
 
 // hashIP creates a SHA-256 hash of an IP address to avoid storing raw IP addresses.
@@ -148,7 +203,7 @@ func (mw *Middleware) RateLimit(next http.Handler) http.Handler {
 			return
 		}
 
-		ip := getIP(r)
+		ip := getIPWithTrustedProxies(r, mw.conf.Security.TrustedProxies)
 		ipHash := hashIP(ip)
 
 		// Check if the request is allowed by the global rate limiter.
@@ -172,7 +227,7 @@ func (mw *Middleware) RateLimitStrict(next http.Handler) http.Handler {
 			return
 		}
 
-		ip := getIP(r)
+		ip := getIPWithTrustedProxies(r, mw.conf.Security.TrustedProxies)
 		ipHash := hashIP(ip)
 
 		// Check if the request is allowed by the strict rate limiter.
@@ -200,7 +255,7 @@ func (mw *Middleware) RateLimitByUser(next http.Handler) http.Handler {
 		userID, ok := r.Context().Value("userID").(int64)
 		if !ok {
 			// If the user is not authenticated, fall back to IP-based rate limiting.
-			ip := getIP(r)
+			ip := getIPWithTrustedProxies(r, mw.conf.Security.TrustedProxies)
 			ipHash := hashIP(ip)
 
 			if !mw.userLimiter.getVisitor(ipHash).Allow() {
@@ -275,7 +330,7 @@ func (mw *Middleware) RateLimitResend(next http.Handler) http.Handler {
 			return
 		}
 
-		ip := getIP(r)
+		ip := getIPWithTrustedProxies(r, mw.conf.Security.TrustedProxies)
 		ipHash := hashIP(ip)
 
 		if !mw.resendLimiter.getVisitor(ipHash).Allow() {

@@ -42,10 +42,15 @@ type Metrics struct {
 //   - Suffix "_total" for counters
 //   - Suffix "_seconds" for durations
 //   - Labels use snake_case (e.g., "status_code", "http_method")
-func NewMetrics() *Metrics {
+func NewMetrics(reg prometheus.Registerer) *Metrics {
+	if reg == nil {
+		reg = prometheus.DefaultRegisterer
+	}
+	factory := promauto.With(reg)
+
 	m := &Metrics{
 		// Authentication metrics
-		LoginAttempts: promauto.NewCounterVec(
+		LoginAttempts: factory.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "auth_login_attempts_total",
 				Help: "Total number of login attempts by status (success, failure, locked, unverified)",
@@ -53,14 +58,14 @@ func NewMetrics() *Metrics {
 			[]string{"status"},
 		),
 
-		RegistrationTotal: promauto.NewCounter(
+		RegistrationTotal: factory.NewCounter(
 			prometheus.CounterOpts{
 				Name: "auth_registrations_total",
 				Help: "Total number of user registrations",
 			},
 		),
 
-		EmailVerifications: promauto.NewCounterVec(
+		EmailVerifications: factory.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "auth_email_verifications_total",
 				Help: "Total number of email verification attempts by status",
@@ -68,7 +73,7 @@ func NewMetrics() *Metrics {
 			[]string{"status"},
 		),
 
-		TokenRefreshes: promauto.NewCounterVec(
+		TokenRefreshes: factory.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "auth_token_refreshes_total",
 				Help: "Total number of token refresh operations by status",
@@ -76,7 +81,7 @@ func NewMetrics() *Metrics {
 			[]string{"status"},
 		),
 
-		AccountLockouts: promauto.NewCounter(
+		AccountLockouts: factory.NewCounter(
 			prometheus.CounterOpts{
 				Name: "auth_account_lockouts_total",
 				Help: "Total number of account lockouts due to failed login attempts",
@@ -84,7 +89,7 @@ func NewMetrics() *Metrics {
 		),
 
 		// HTTP metrics
-		HTTPRequestsTotal: promauto.NewCounterVec(
+		HTTPRequestsTotal: factory.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "http_requests_total",
 				Help: "Total number of HTTP requests by method, path, and status code",
@@ -92,7 +97,7 @@ func NewMetrics() *Metrics {
 			[]string{"method", "path", "status_code"},
 		),
 
-		HTTPRequestDuration: promauto.NewHistogramVec(
+		HTTPRequestDuration: factory.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Name: "http_request_duration_seconds",
 				Help: "HTTP request latency in seconds",
@@ -102,7 +107,7 @@ func NewMetrics() *Metrics {
 			[]string{"method", "path"},
 		),
 
-		ActiveConnections: promauto.NewGauge(
+		ActiveConnections: factory.NewGauge(
 			prometheus.GaugeOpts{
 				Name: "http_active_connections",
 				Help: "Current number of active HTTP connections",
@@ -110,7 +115,7 @@ func NewMetrics() *Metrics {
 		),
 
 		// Security metrics
-		RateLimitHits: promauto.NewCounterVec(
+		RateLimitHits: factory.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "security_rate_limit_hits_total",
 				Help: "Total number of rate limit violations by endpoint",
@@ -118,28 +123,28 @@ func NewMetrics() *Metrics {
 			[]string{"endpoint"},
 		),
 
-		CSRFFailures: promauto.NewCounter(
+		CSRFFailures: factory.NewCounter(
 			prometheus.CounterOpts{
 				Name: "security_csrf_failures_total",
 				Help: "Total number of CSRF validation failures",
 			},
 		),
 
-		InvalidTokens: promauto.NewCounter(
+		InvalidTokens: factory.NewCounter(
 			prometheus.CounterOpts{
 				Name: "security_invalid_tokens_total",
 				Help: "Total number of invalid or expired JWT token attempts",
 			},
 		),
 
-		TokenBindingFails: promauto.NewCounter(
+		TokenBindingFails: factory.NewCounter(
 			prometheus.CounterOpts{
 				Name: "security_token_binding_failures_total",
 				Help: "Total number of token binding verification failures (IP/UA mismatch)",
 			},
 		),
 
-		PermissionDenials: promauto.NewCounterVec(
+		PermissionDenials: factory.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "security_permission_denials_total",
 				Help: "Total number of permission check failures by permission type",
@@ -148,14 +153,14 @@ func NewMetrics() *Metrics {
 		),
 
 		// System metrics
-		DatabaseConnections: promauto.NewGauge(
+		DatabaseConnections: factory.NewGauge(
 			prometheus.GaugeOpts{
 				Name: "database_connections_active",
 				Help: "Current number of active database connections",
 			},
 		),
 
-		BackgroundTasks: promauto.NewGaugeVec(
+		BackgroundTasks: factory.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Name: "background_tasks_status",
 				Help: "Status of background tasks (1=running, 0=stopped)",

@@ -64,4 +64,20 @@ type UserRepository interface {
 	// RemovePermissionFromRole removes a permission from a role.
 	// This is used for dynamic permission management.
 	RemovePermissionFromRole(role string, permission domain.Permission) error
+
+	// SetPasswordResetToken stores a password reset token and its expiration for a user.
+	// This is called when a user requests a password reset.
+	SetPasswordResetToken(email string, token string, expiresAt time.Time) error
+
+	// GetByPasswordResetToken retrieves a user by their password reset token.
+	// Returns the user if the token exists and hasn't expired, or an error otherwise.
+	GetByPasswordResetToken(token string) (*domain.User, error)
+
+	// UpdatePassword updates a user's password hash.
+	// This is called after successful password reset or password change.
+	UpdatePassword(userID int64, hashedPassword string) error
+
+	// ClearPasswordResetToken clears the password reset token and expiration for a user.
+	// This is called after a successful password reset to invalidate the token.
+	ClearPasswordResetToken(userID int64) error
 }
