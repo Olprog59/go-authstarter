@@ -1,0 +1,123 @@
+# Example configuration file for GoAuthStarter
+# Copy this file to config.yaml and adjust values for your environment
+
+# Server configuration
+server:
+  port: "8080"
+  # ReadTimeout is the maximum duration for reading the entire request, including the body.
+  read_timeout: 10s
+  # WriteTimeout is the maximum duration before timing out writes of the response.
+  write_timeout: 10s
+  # IdleTimeout is the maximum amount of time to wait for the next request when keep-alives are enabled.
+  idle_timeout: 120s
+  base_url: "http://localhost:8080"
+  frontend_url: "http://localhost:5173"
+
+# Environment (development, staging, production)
+environment: "development"
+
+# Database configuration
+database:
+  # Database type: sqlite, mysql, or postgres
+  type: "sqlite"
+
+  # SQLite configuration (default)
+  dsn: "data.sqlite?_journal_mode=WAL&_busy_timeout=5000"
+  migrations_path: "migrations/sqlite"
+
+  # MySQL configuration (uncomment to use)
+  # type: "mysql"
+  # dsn: "user:password@tcp(localhost:3306)/goauthstarter?parseTime=true&charset=utf8mb4&collation=utf8mb4_unicode_ci"
+  # migrations_path: "migrations/mysql"
+
+  # PostgreSQL configuration (uncomment to use)
+  # type: "postgres"
+  # dsn: "host=localhost port=5432 user=postgres password=secret dbname=goauthstarter sslmode=disable"
+  # migrations_path: "migrations/postgres"
+
+  # Connection pool settings (optional, defaults shown)
+  max_open_conns: 25
+  max_idle_conns: 5
+
+# Database backup configuration
+backup:
+  enabled: false # Enable automatic database backups
+  interval: "24h" # Backup interval (e.g., 1h, 6h, 24h)
+  path: "./backups" # Directory to store backups
+  retention_days: 7 # Number of days to keep old backups (0 = keep all)
+
+# JWT and Cookie configuration
+auth:
+  # JWT secret key. Use a long, random string in production.
+  # Can be overridden by the JWT_SECRET environment variable.
+  jwt_secret: "your-super-secret-key-change-this-in-production"
+  # Access token duration (e.g., 15m, 1h)
+  access_token_duration: 15m
+  # Refresh token duration (e.g., 720h for 30 days)
+  refresh_token_duration: 720h
+  # Cookie domain
+  cookie_domain: "localhost"
+  # Cookie path
+  cookie_path: "/"
+  # Cookie secure flag (set to true in production with HTTPS)
+  cookie_secure: false
+
+# Security configuration
+security:
+  # Maximum number of failed login attempts before account lockout
+  max_failed_attempts: 5
+  # Duration of account lockout after max failed attempts
+  lockout_duration: 15m
+  # Bcrypt cost factor for password hashing (10-14 recommended, higher = more secure but slower)
+  bcrypt_cost: 12
+  # List of trusted proxy IP ranges (e.g., ["192.168.1.0/24"])
+  trusted_proxies: []
+
+email_verification:
+  # How long verification tokens remain valid
+  token_expiration: 24h
+  # Minimum time between resend requests per email address (prevents spam)
+  resend_cooldown: 1m
+  # Maximum resend attempts allowed within the cooldown period
+  resend_max_attempts: 1
+
+# CORS configuration
+cors:
+  # List of allowed origins. Use "*" for public access (not recommended for production).
+  allowed_origins:
+    - "http://localhost:5173"
+    - "http://localhost:3000"
+
+# Rate Limiter configuration
+rate_limiter:
+  # Requests per second
+  rps: 10
+  # Burst size
+  burst: 20
+  # Enable rate limiter
+  enabled: true
+
+# SMTP configuration for sending emails
+smtp:
+  host: "localhost"
+  port: 1025
+  username: ""
+  password: ""
+  from: "no-reply@go-fun.dev"
+
+# Logging configuration
+logging:
+  # Logging level (debug, info, warn, error)
+  level: "info"
+  # Log format (text for human-readable, json for structured logs)
+  format: "text"
+  # Enable sending logs to Loki
+  loki_enabled: false
+  # Loki server URL
+  loki_url: "http://localhost:3100"
+  # Static labels to attach to all logs sent to Loki
+  loki_labels:
+    app: "go-authstarter"
+    environment: "development"
+  # Number of logs to batch before sending to Loki (0 = immediate, 10-100 recommended)
+  loki_batch_size: 10

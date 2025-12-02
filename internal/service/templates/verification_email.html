@@ -1,0 +1,100 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        line-height: 1.6;
+        color: #333;
+      }
+      .container {
+        max-width: 600px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+      .header {
+        text-align: center;
+        padding: 20px 0;
+      }
+      .content {
+        background: #f9f9f9;
+        padding: 30px;
+        border-radius: 8px;
+      }
+      .button {
+        display: inline-block;
+        padding: 12px 30px;
+        background: #007bff;
+        color: #ffffff !important;
+        text-decoration: none;
+        border-radius: 5px;
+        margin: 20px 0;
+        font-weight: bold;
+      }
+      .footer {
+        margin-top: 30px;
+        padding-top: 20px;
+        border-top: 1px solid #ddd;
+        font-size: 12px;
+        color: #666;
+        text-align: center;
+      }
+      .warning {
+        background: #fff3cd;
+        padding: 15px;
+        border-left: 4px solid #ffc107;
+        margin: 20px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h2>Confirmation de votre compte</h2>
+      </div>
+
+      <div class="content">
+        <p>Bonjour,</p>
+
+        <p>
+          Merci de vous être inscrit sur notre plateforme ! Pour finaliser la
+          création de votre compte, veuillez confirmer votre adresse email en
+          cliquant sur le bouton ci-dessous :
+        </p>
+
+        <div style="text-align: center">
+          <a href="{{.VerificationURL}}" class="button"
+            >Confirmer mon adresse email</a
+          >
+        </div>
+
+        <p>
+          Si le bouton ne fonctionne pas, vous pouvez copier et coller le lien
+          suivant dans votre navigateur :
+        </p>
+        <p style="word-break: break-all; color: #007bff">{{.VerificationURL}}</p>
+
+        <div class="warning">
+          <strong>⚠️ Important :</strong> Ce lien de vérification expire dans
+          {{.Duration}}. Si vous n'avez pas demandé cette inscription, vous
+          pouvez ignorer cet email.
+        </div>
+
+        <p>
+          Si vous rencontrez des difficultés, n'hésitez pas à nous contacter.
+        </p>
+
+        <p>Cordialement,<br />L'équipe</p>
+      </div>
+
+      <div class="footer">
+        <p>Cet email a été envoyé à <strong>{{.Email}}</strong></p>
+        <p>
+          Vous recevez cet email car une inscription a été effectuée avec cette
+          adresse.
+        </p>
+      </div>
+    </div>
+  </body>
+</html>
