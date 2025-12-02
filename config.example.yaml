@@ -1,0 +1,69 @@
+# Example configuration file for GoAuthStarter
+# Copy this file to config.yaml and adjust values for your environment
+
+server:
+  port: "8080"
+  base_url: "http://localhost:8080"
+  frontend_url: "http://localhost:5173"
+  read_timeout: "10s"
+  write_timeout: "10s"
+  idle_timeout: "120s"
+
+environment: "development" # development, production
+
+database:
+  dsn: "data.sqlite?_journal_mode=WAL&_busy_timeout=5000"
+  migrations_path: "migrations"
+  max_open_conns: 25
+  max_idle_conns: 5
+
+# Database backup configuration
+backup:
+  enabled: false              # Enable automatic database backups
+  interval: "24h"             # Backup interval (e.g., 1h, 6h, 24h)
+  path: "./backups"           # Directory to store backups
+  retention_days: 7           # Number of days to keep old backups (0 = keep all)
+
+auth:
+  jwt_secret: "your-super-secret-key-change-this-in-production"
+  access_token_duration: "15m"
+  refresh_token_duration: "720h" # 30 days
+  cookie_domain: "localhost"
+  cookie_path: "/"
+  cookie_secure: false # Set to true in production with HTTPS
+
+security:
+  max_failed_attempts: 5
+  lockout_duration: "15m"
+  bcrypt_cost: 12
+  trusted_proxies: [] # e.g., ["192.168.1.0/24"]
+
+email_verification:
+  token_expiration: "24h"
+
+cors:
+  allowed_origins:
+    - "http://localhost:5173"
+    - "http://localhost:3000"
+
+rate_limiter:
+  enabled: true
+  rps: 10        # Requests per second
+  burst: 20      # Maximum burst size
+
+smtp:
+  host: "localhost"
+  port: 1025
+  username: ""
+  password: ""
+  from: "no-reply@go-fun.dev"
+
+logging:
+  level: "info"     # debug, info, warn, error
+  format: "text"    # text, json
+  loki_enabled: false
+  loki_url: "http://localhost:3100"
+  loki_labels:
+    app: "go-authstarter"
+    environment: "development"
+  loki_batch_size: 10

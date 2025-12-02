@@ -1,0 +1,116 @@
+### 
+
+@host = http://localhost:8080/api
+@host_not_api = http://localhost:8080
+
+
+### loginRequest
+
+POST {{host}}/login HTTP/1.1
+Content-Type: application/json
+Accept: application/json
+
+{
+  "email": "sam@sam.sam",
+  "password": "Password_123"
+}
+
+
+### register
+
+POST {{host}}/register HTTP/1.1
+Content-Type: application/json
+Accept: application/json
+
+{
+  "email": "sam@sam.sam",
+  "password": "Password_123"
+}
+
+
+### home
+
+GET http://localhost:8080 HTTP/1.1
+Content-Type: application/json
+Accept: application/json
+Cookie: access_token={{loginRequest.response.cookies.access_token.value}}
+Cookie: refresh_token={{loginRequest.response.cookies.refresh_token.value}}
+Cookie: csrf_token={{loginRequest.response.cookies.csrf_token.value}}
+X-Csrf-Token: {{loginRequest.response.cookies.csrf_token.value}}
+Authorization: Bearer {{loginRequest.response.cookies.access_token.value}}
+
+
+### me
+
+GET {{host}}/me HTTP/1.1
+Content-Type: application/json
+Accept: application/json
+Cookie: access_token={{loginRequest.response.cookies.access_token.value}}
+Cookie: refresh_token={{loginRequest.response.cookies.refresh_token.value}}
+Cookie: csrf_token={{loginRequest.response.cookies.csrf_token.value}}
+X-Csrf-Token: {{loginRequest.response.cookies.csrf_token.value}}
+Authorization: Bearer {{loginRequest.response.cookies.access_token.value}}
+
+
+### resend-verification
+
+POST {{host}}/resend-verification HTTP/1.1
+Content-Type: application/json
+Accept: application/json
+
+{
+  "email": "sam@sam.sam"
+}
+
+
+### reset password
+
+POST {{host}}/request-password-reset HTTP/1.1
+Content-Type: application/json
+Accept: application/json
+
+{
+  "email": "sam@sam.sam"
+}
+
+
+### all users
+
+GET {{host}}/admin/users HTTP/1.1
+Content-Type: application/json
+Accept: application/json
+Content-Type: application/json
+Accept: application/json
+Cookie: access_token={{loginRequest.response.cookies.access_token.value}}
+Cookie: refresh_token={{loginRequest.response.cookies.refresh_token.value}}
+Cookie: csrf_token={{loginRequest.response.cookies.csrf_token.value}}
+X-Csrf-Token: {{loginRequest.response.cookies.csrf_token.value}}
+Authorization: Bearer {{loginRequest.response.cookies.access_token.value}}
+
+
+### all users
+
+DELETE {{host}}/admin/users/2 HTTP/1.1
+Content-Type: application/json
+Accept: application/json
+Content-Type: application/json
+Accept: application/json
+Cookie: access_token={{loginRequest.response.cookies.access_token.value}}
+Cookie: refresh_token={{loginRequest.response.cookies.refresh_token.value}}
+Cookie: csrf_token={{loginRequest.response.cookies.csrf_token.value}}
+X-Csrf-Token: {{loginRequest.response.cookies.csrf_token.value}}
+Authorization: Bearer {{loginRequest.response.cookies.access_token.value}}
+
+
+### health
+
+GET {{host_not_api}}/health HTTP/1.1
+Content-Type: application/json
+Accept: application/json
+
+
+### readiness
+
+GET {{host_not_api}}/readiness HTTP/1.1
+Content-Type: application/json
+Accept: application/json
